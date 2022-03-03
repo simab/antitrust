@@ -1,0 +1,413 @@
+---
+title: "Historical funding levels of DoJ and FTC"
+author: "Sima Biondi"
+date: "9/22/2021"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(data.table)
+library(readxl)
+library(writexl)
+library(here)
+library(scales)
+
+fig.path = here::here("figs/agency budget")
+options(warn = -1)
+```
+
+# Read
+```{r read data}
+doj_df_read = read_excel("data/doj_atr-appropriation-figures1017.xls", sheet = "data")
+names(doj_df_read) = c("year", "doj_direct_appro_amt", "doj_filing_fee_amt", "doj_total_amt", "notes")
+
+ftc_df_read = read_excel("data/ftc_appro.xlsx")
+
+inflation_df_1913 = read_excel("data/CPI_index_u.xlsx")
+inflation_df_1913 = inflation_df_1913 %>%
+  filter(year < 1947)
+inflation_df_1947 = read.table("http://research.stlouisfed.org/fred2/data/CPIAUCSL.txt",
+             skip = 53, header = TRUE)
+
+real_gdp_per_capita_data = read_excel("data/gdp-per-capita-maddison-2020.xlsx", sheet = "data")
+
+ftc_breakdown_df_read = read_excel("data/ftc appropriations docs/ftc_financial_reports.xlsx")
+
+```
+# Clean
+```{r clean doj data}
+
+doj_df_clean = doj_df_read %>%
+  select(-notes) %>%
+  mutate(across(ends_with("amt"), ~ .x*1000)) 
+
+```
+
+```{r clean ftc data}
+ftc_df_clean = ftc_df_read %>%
+  left_join(doj_df_clean) %>%
+  rename(ftc_filing_fee_amt = doj_filing_fee_amt) %>%
+  mutate(ftc_total_amt = case_when(is.na(ftc_filing_fee_amt) ~ ftc_appro_amt,
+                                   T ~ ftc_appro_amt + ftc_filing_fee_amt)) %>%
+  select(year, ftc_total_amt, ftc_appro_amt, ftc_filing_fee_amt)
+```
+
+
+```{r clean inflation data}
+inflation_df = inflation_df_1947 %>%
+  mutate(year = year(DATE)) %>%
+  group_by(year) %>%
+  summarise(cpi = mean(VALUE)) %>%
+  bind_rows(., inflation_df_1913) %>%
+  arrange(year) 
+```
+
+
+```{r clean real GDP per capita}
+real_GDP_per_capita_df = real_gdp_per_capita_data %>%
+  select(-Code, -`145446-annotations`, -Entity) %>%
+  rename(year = Year, `Real GDP per capita` = `GDP per capita` ) %>%
+  filter(year >= 1913)
+```
+
+
+# Combining data sources
+```{r}
+
+agency_budgets = doj_df_clean %>%
+  left_join(ftc_df_clean) %>%
+  pivot_longer(!year, names_to = "budget_id", values_to = "budget_allocated_amt")
+
+```
+
+
+
+```{r graph agency budgets without adjustments}
+agency_budgets %>%
+  filter(year > 1930 & year < 2019) %>%
+  filter(budget_id == "doj_total_amt" | 
+           budget_id == "ftc_total_amt") %>%
+  filter(!is.na(budget_allocated_amt)) %>%
+  mutate(budget_id = case_when(budget_id == "doj_total_amt" ~ "DOJ antitrust division",
+                                T ~ "FTC")) %>%
+  ggplot(., aes(x = year, y = budget_allocated_amt, 
+                group = budget_id, color = budget_id)) + geom_point() + 
+  labs(colour = "Agency", title = "Budgets over time: DoJ Antitrust division and FTC") + ylab("Nominal dollars") + scale_y_continuous(label = comma)
+
+ggsave(path = fig.path, "agency_budget_no_adj.png")
+
+
+```
+
+
+# Adjusting for inflation (total budget)
+```{r adjusting for inflation}
+
+inflation_df = inflation_df %>%
+  mutate(cpi_of_2011 = filter(inflation_df, year == 2011)$cpi) %>%
+  mutate(adj_factor = cpi/cpi_of_2011)
+
+
+#adjust the budgets for inflation 
+agency_budgets %>%
+  full_join(., inflation_df, by = "year") %>%
+  filter(year > 1930 & year < 2019) %>%
+  filter(budget_id == "doj_total_amt" | 
+           budget_id == "ftc_total_amt") %>%
+  mutate(budget_allocated_amt_adj = budget_allocated_amt/adj_factor) %>%
+  filter(!is.na(budget_allocated_amt_adj)) %>%
+  mutate(budget_id = case_when(budget_id == "doj_total_amt" ~ "DOJ antitrust division",
+                                T ~ "FTC")) %>%
+  ggplot(., aes(x = year, y = budget_allocated_amt_adj, 
+                group = budget_id, color = budget_id)) + geom_point() + 
+                  labs(colour = "Agency", title = "Budgets over time: DoJ Antitrust division and FTC") + 
+                  ylab("Dollars (inflation adjusted, 2011)") + 
+                  scale_y_continuous(label = comma) 
+
+ggsave(path = fig.path, "agency_budget_inflation_adj.png")
+
+  
+```
+
+# Adjusting for inflation and real GDP per capita
+```{r adjusting for inflation_df and real GDP per capita}
+
+#set base year to 1983
+base_year_val_rGDPpc = real_GDP_per_capita_df$`Real GDP per capita`[real_GDP_per_capita_df$year == 2011]
+real_GDP_per_capita_df = real_GDP_per_capita_df %>%
+  mutate(rGDPpc_base_2011 =  (`Real GDP per capita`)/base_year_val_rGDPpc) 
+
+
+agency_budgets %>%
+  full_join(., inflation_df, by = "year") %>%
+  left_join(., real_GDP_per_capita_df, by = "year") %>%
+  filter(year > 1930 & year < 2019) %>%
+  filter(budget_id == "doj_total_amt" | 
+           budget_id == "ftc_total_amt") %>%
+  mutate(budget_allocated_amt_adj = (budget_allocated_amt/adj_factor)/rGDPpc_base_2011) %>%
+  mutate(time_period = case_when(year <= 1975 ~ "pre", T ~ "post")) %>% 
+  mutate(test = case_when(time_period == "pre" & budget_id == "doj_total_amt" ~ 1,
+                          time_period == "post" & budget_id == "doj_total_amt" ~ 2,
+                          time_period == "pre" & budget_id == "ftc_total_amt" ~ 3,
+                          T ~ 4)) %>%
+  filter(!is.na(budget_allocated_amt_adj)) %>%
+  mutate(budget_id = case_when(budget_id == "doj_total_amt" ~ "DOJ antitrust division",
+                                T ~ "FTC")) %>% 
+  ggplot(., aes(x = year, y = budget_allocated_amt_adj, 
+                group = budget_id, color = budget_id)) + geom_point() + 
+                  labs(colour = "Agency", title = "Budgets over time: DoJ Antitrust division and FTC") + 
+                  ylab("Dollars (inflation and real GDP per capita adjusted, 2011)") + 
+                  scale_y_continuous(label = comma) + geom_smooth(method = "lm", aes(group = test))
+
+ggsave(path = fig.path, "agency_budget_point_trend.png")
+
+
+```
+
+# Decomposing budget data
+```{r}
+
+ftc_breakdown_df = ftc_breakdown_df_read %>%
+  mutate(ratio = competitionFunds/(consumerProtectionFunds + competitionFunds),
+         total_office_exp = executiveFunds + adminFunds) %>%
+  mutate(competitionFunds = case_when(!is.na(executiveFunds) ~ 
+                                        competitionFunds + ratio*total_office_exp,
+                                      T ~ competitionFunds)) %>%
+  select(year, competitionFunds) %>%
+  pivot_longer(!year, names_to = "budget_id", values_to = "budget_allocated_amt")
+
+```
+
+
+```{r}
+agency_budgets %>%
+  bind_rows(ftc_breakdown_df) %>%
+  full_join(., inflation_df, by = "year") %>%
+  left_join(., real_GDP_per_capita_df, by = "year") %>%
+  mutate(budget_allocated_amt_adj = (budget_allocated_amt/adj_factor)/rGDPpc_base_2011) %>%
+  filter(budget_id == "doj_total_amt" | budget_id == "competitionFunds" | 
+           str_detect(budget_id, "filing_fee_amt")) %>%
+   filter(year > 1989 & year < 2021) %>%
+    mutate(agency_id = case_when(str_detect(budget_id, "doj") ~ "DoJ Antitrust",
+                               T ~ "FTC's Competition Bureau"),
+         budget_id_type = case_when(str_detect(budget_id, "fee") ~ "Filing fee",
+                               T ~ "Total budget")) %>%
+  #select(budget_id_type, budget_id )
+  #arrange(desc(budget_allocated_amt_adj)) %>%
+  
+  ggplot(aes(x = year, y = budget_allocated_amt_adj, color = budget_id_type)) +
+  geom_col(position = "identity", alpha = 0.2) + 
+  facet_wrap(vars(agency_id)) + 
+  theme_minimal() + 
+  labs(colour = "Funding source", title = "Budgets over time: DoJ Antitrust division and FTC",
+     caption = "Source: FTC Annual Reports and Congressional Budget Justification Summary",
+     y = "Dollars (inflation and real GDP per capita adjusted, 2011)",
+     x = "Year") + 
+  scale_y_continuous(label = label_number(suffix = " M", scale = 1e-6)) 
+
+ggsave(path = fig.path, "agency_budget_decompose_bar.png")
+
+
+  
+  
+  
+  
+  
+```
+
+
+
+```{r}
+
+agency_budgets_breakdown_df = 
+  
+agency_budgets %>%
+  bind_rows(ftc_breakdown_df) %>%
+  pivot_wider(names_from = budget_id, values_from = budget_allocated_amt) 
+  
+  
+  mutate(ftcCompApproNotFines = case_when(is.na(ftc_filing_fee_amt) ~ competitionFunds,
+                                           ftc_filing_fee_amt > competitionFunds ~
+                                             competitionFunds,
+                                           ftc_filing_fee_amt < competitionFunds ~
+                                             competitionFunds,
+                                           T ~ competitionFunds)) %>%
+  pivot_longer(!year, names_to = "budget_id", values_to = "budget_allocated_amt") %>%
+  full_join(., inflation_df, by = "year") %>%
+  left_join(., real_GDP_per_capita_df, by = "year") %>%
+  filter(year > 1930 & year < 2019) %>%
+  mutate(budget_allocated_amt_adj = (budget_allocated_amt/adj_factor)/rGDPpc_base_2011) %>%
+  filter(!is.na(budget_allocated_amt_adj) & year > 1952) %>%
+  
+  filter(budget_id != "doj_total_amt" & budget_id != "ftc_total_amt" &
+           budget_id != "ftc_appro_amt" & budget_id != "competitionFunds") %>%
+  mutate(budget_id = case_when(budget_id == "doj_direct_appro_amt" ~ "DOJ Congressional appropriation",
+                               budget_id == "doj_filing_fee_amt" ~ "DOJ filing fee revenue",
+                               budget_id == "ftcCompApproNotFines" ~ 
+                                 "FTC 'Maintaining Competition' Congressional appropriation",
+                               budget_id == "ftc_filing_fee_amt" ~ "FTC filing fee revenue")) %>%
+  mutate(agency_id = case_when(str_detect(budget_id, "FTC") ~ "FTC",
+                               T ~ "DOJ")) %>%
+    mutate(budget_id = case_when(str_detect(budget_id, "filing fee") ~ "Filing fee revenue",
+                                 T ~ "Congressional allocation"))
+
+agency_budgets_breakdown_df %>%
+  rename(`Funding source` = budget_id) %>%
+  ggplot(., aes(x = year, y = budget_allocated_amt_adj, fill= `Funding source`)) +
+    geom_col() +
+    facet_wrap(~agency_id) +
+                  labs(colour = "Funding source", title = "Budgets over time: DoJ Antitrust division and FTC",
+                       caption = "Source: FTC Annual Reports and Congressional Budget Justification Summary") + 
+                  ylab("Dollars (inflation and real GDP per capita adjusted, 2011)") + 
+                  scale_y_continuous(label = label_number(suffix = " M", scale = 1e-6)) +
+  theme_minimal()
+ggsave(path = fig.path, "agency_budget_decompose_bar.png")
+
+agency_budgets_breakdown_df %>%
+  filter(year == 2010)
+
+```
+
+
+
+```{r}
+
+agency_budgets %>%
+  bind_rows(ftc_breakdown_df) %>%
+  full_join(., inflation_df, by = "year") %>%
+  left_join(., real_GDP_per_capita_df, by = "year") %>%
+  filter(year > 1952 & year < 2019) %>%
+  mutate(budget_allocated_amt_adj = (budget_allocated_amt/adj_factor)/rGDPpc_base_2011) %>%
+  filter(!is.na(budget_allocated_amt_adj)) %>%
+  filter(budget_id != "doj_total_amt" & budget_id != "ftc_total_amt" &
+           budget_id != "ftc_appro_amt") %>%
+  mutate(budget_id = case_when(budget_id == "doj_direct_appro_amt" ~ "DOJ Congressional appropriation",
+                               budget_id == "doj_filing_fee_amt" ~ "DOJ filing fee revenue",
+                               budget_id == "competitionFunds" ~ 
+                                 "FTC 'Maintaining Competition' Congressional appropriation",
+                               budget_id == "ftc_filing_fee_amt" ~ "FTC filing fee revenue")) %>%
+  mutate(agency_id = case_when(str_detect(budget_id, "FTC") ~ "FTC",
+                               T ~ "DOJ")) %>%
+    mutate(budget_id = case_when(str_detect(budget_id, "filing fee") ~ "Filing fee revenue",
+                                 T ~ budget_id)) %>%
+  rename(`Funding source` = budget_id) %>%
+  ggplot(., aes(x = year, y = budget_allocated_amt_adj, color= `Funding source`, group = `Funding source`)) +
+    geom_point() +
+        labs(colour = "Funding source", title = "Budgets over time: DoJ Antitrust division and FTC") +
+                  ylab("Dollars (inflation and real GDP per capita adjusted, 2011)") + 
+                  scale_y_continuous(label = comma)
+
+ggsave(path = fig.path, "agency_budget_decompose_point.png")
+
+
+
+```
+
+
+```{r}
+
+
+agency_budgets %>%
+  bind_rows(ftc_breakdown_df) %>%
+  full_join(., inflation_df, by = "year") %>%
+  left_join(., real_GDP_per_capita_df, by = "year") %>%
+  filter(year > 1952 & year < 2021) %>%
+  filter(budget_id == "doj_total_amt" | budget_id ==  "competitionFunds") %>%
+  mutate(budget_id = recode(budget_id, "doj_total_amt" = "doj_total_amt",
+                                        "competitionFunds" = "ftc_total_amt")) %>%
+  mutate(budget_allocated_amt_adj = (budget_allocated_amt/adj_factor)/rGDPpc_base_2011) %>%
+  mutate(agency_id = case_when(str_detect(budget_id, "doj") ~ "DoJ",
+                               T ~ "FTC")) %>%
+  mutate(budget_id = case_when(str_detect(budget_id, "filing fee") ~ "Filing fee revenue",
+                                 T ~ budget_id)) %>%
+  mutate(time_period = case_when(year <= 1975 ~ "pre", T ~ "post")) %>% 
+  mutate(test = case_when(time_period == "pre" & agency_id == "DoJ" ~ 1,
+                          time_period == "post" & agency_id == "DoJ" ~ 2,
+                          time_period == "pre" & agency_id == "FTC" ~ 3,
+                          T ~ 4)) %>%
+  ggplot(., aes(x = year, y = budget_allocated_amt_adj, 
+                group = agency_id, color = agency_id)) + geom_point() + 
+                  labs(colour = "Agency", title = "Budgets over time: DoJ Antitrust division and FTC",
+                       y = "Dollars (inflation and real GDP \nper capita adjusted, 2011)",
+                       x = "Year",
+                       caption = "Source: Annual Reports of the FTC, the FTC's annual Congressional budget request, and DOJ website") + 
+                  scale_y_continuous(labels = label_number(suffix = " M", scale = 1e-6)) + 
+  geom_smooth(method = "lm", aes(group = test)) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+  ggsave(path = fig.path, "agency_budget_decompose_line_1975.png")
+  
+  
+  agency_budgets %>%
+  bind_rows(ftc_breakdown_df) %>%
+  full_join(., inflation_df, by = "year") %>%
+  left_join(., real_GDP_per_capita_df, by = "year") %>%
+  filter(year > 1952 & year < 2021) %>%
+  filter(budget_id == "doj_total_amt" | budget_id ==  "competitionFunds") %>%
+  mutate(budget_id = recode(budget_id, "doj_total_amt" = "doj_total_amt",
+                                        "competitionFunds" = "ftc_total_amt")) %>%
+  mutate(budget_allocated_amt_adj = (budget_allocated_amt/adj_factor)/rGDPpc_base_2011) %>%
+  mutate(agency_id = case_when(str_detect(budget_id, "doj") ~ "DoJ",
+                               T ~ "FTC")) %>%
+  mutate(budget_id = case_when(str_detect(budget_id, "filing fee") ~ "Filing fee revenue",
+                                 T ~ budget_id)) %>%
+  mutate(time_period = case_when(year <= 1980 ~ "pre", T ~ "post")) %>% 
+  mutate(test = case_when(time_period == "pre" & agency_id == "DoJ" ~ 1,
+                          time_period == "post" & agency_id == "DoJ" ~ 2,
+                          time_period == "pre" & agency_id == "FTC" ~ 3,
+                          T ~ 4)) %>%
+  ggplot(., aes(x = year, y = budget_allocated_amt_adj, 
+                group = agency_id, color = agency_id)) + geom_point() + 
+                  labs(colour = "Agency", title = "Budgets over time: DoJ Antitrust division and FTC",
+                       y = "Dollars (inflation and real GDP \nper capita adjusted, 2011)",
+                       x = "Year",
+                       caption = "Source: Annual Reports of the FTC, the FTC's annual Congressional budget request, and DOJ website") + 
+                  scale_y_continuous(labels = label_number(suffix = " M", scale = 1e-6)) + 
+  geom_smooth(method = "lm", aes(group = test)) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+    ggsave(path = fig.path, "agency_budget_decompose_line_1980.png")
+
+
+  
+```
+
+
+# FTC FTEs
+
+```{r}
+ftc_breakdown_df_read %>%
+  select(year, competitionFTE) %>%
+  pivot_longer(!year) %>%
+  filter(!is.na(value)) %>%
+  ggplot() + geom_point(aes(x = year, y = value)) +
+    labs(x = "Year", y = "FTEs", title = "FTC's 'Maintaining Competition' mission's FTEs")
+ggsave(path = fig.path, "ftc_ftes_competition.png")
+
+ftc_breakdown_df_read %>%
+  select(year, competitionFTE, consumerProtectionFTE) %>%
+  pivot_longer(!year, names_to = "type_FTE") %>%
+  filter(!is.na(value)) %>%
+  mutate(type_FTE = recode(type_FTE, 'consumerProtectionFTE' = 'Consumer Protection ',
+                           'competitionFTE' = 'Maintaining Competition')) %>%
+  mutate(Mission = type_FTE) %>%
+  ggplot() + geom_point(aes(x = year, y = value, color = Mission)) +
+    labs(x = "Year", y = "FTEs", title = "FTC's mission's FTEs",
+         caption = "FTC's Annual Reports and Congressional Budget Justifications") + theme_minimal() +
+    theme(legend.position = "bottom")
+ggsave(path = fig.path, "ftc_ftes_competition_and_consumer.png")
+
+```
+
+```{r}
+filter(agency_budgets, year == 1996)
+```
+

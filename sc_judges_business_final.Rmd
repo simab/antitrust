@@ -19,6 +19,7 @@ library(RColorBrewer)
 library(data.table)
 library(rvest)
 library(kableExtra)
+install.packages("usethis")
 
 options(warn = -1)
 fig.path = here::here("figs/sct")

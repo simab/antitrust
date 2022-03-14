@@ -19,7 +19,8 @@ library(RColorBrewer)
 library(data.table)
 library(rvest)
 library(kableExtra)
-install.packages("usethis")
+library(scales)
+library(zoo)
 
 options(warn = -1)
 fig.path = here::here("figs/sct")
@@ -64,8 +65,8 @@ antitrust_westlaw_sc_cases = antitrust_westlaw_sc_cases_sherman %>%
 sc_judge = sc_judge_read %>%
   mutate(year_oath = format(`Date of Oath`, "%Y")) %>%
   mutate(across(c(CC_endorse, WSJ_endorse),  na_if, "Unavailable")) %>%
-  mutate(era = case_when(year_oath > 1975 ~ "low enforcement",
-                         T ~ "high enforcement")) %>%
+  mutate(era = case_when(year_oath > 1975 ~ "Low enforcement",
+                         T ~ "High enforcement")) %>%
   mutate(across(.cols = ends_with("endorse"), .fns = ~ case_when(str_detect(., "y") ~ 1, 
                                                                  T ~ 0))) %>%
   mutate(name_edit = `Last Name, First Name`) %>%
@@ -92,8 +93,6 @@ sc_judge = sc_judge_read %>%
   # mutate(ELP_nyt_perc = bf_nyt_score,
   #        ELP_nyt_case_count = total_bf_nyt_votes)
 
-
-
 ```
 
 ```{r clean judge vote data}
@@ -117,6 +116,7 @@ justice_per_court =  justice_per_court_raw %>%
 ## Calculations
 ### Creating scores
 #### Judge level
+
 ```{r BF and BF_NYT scores from Epstein data}
 justice_bf_scores  = bf_scores_read %>%
   filter(BusinessLitigant == "1. business is Petitioner OR respondent") %>%
@@ -144,7 +144,7 @@ justice_bf_nyt_scores = bf_scores_read %>%
   mutate(score_type = "bf_nyt") %>%
   rename(`pro-enforcement` = `j vote against business`,
          `anti-enforcement` = `j vote for business`) %>%
-    filter(justiceName %in% justice_per_court$justiceName) 
+  filter(justiceName %in% justice_per_court$justiceName) 
 
 ```
 
@@ -231,6 +231,57 @@ court_bf_nyt_score = justice_bf_nyt_scores %>%
 #   mutate(bf_nyt_score_bool = case_when(is.na(bf_nyt_score_bool) ~ "NYT",
 #                                        T ~ bf_nyt_score_bool))
 ```
+
+```{r bf roll mean - justice}
+bf_scores_roll_mean = bf_scores_read %>%
+  filter(BusinessLitigant == "1. business is Petitioner OR respondent" &
+           !is.na(JVoteForBusiness)) %>%
+  group_by(term, JVoteForBusiness) %>%
+  summarise(votes = n()) %>%
+  pivot_wider(names_from = JVoteForBusiness, values_from = votes) %>%
+  mutate(total_votes = `j vote against business` + `j vote for business`,
+         score = round(`j vote for business`/(`j vote against business` + `j vote for business`), 3)) %>%
+  mutate(score_type = "bf") %>%
+  rename(`pro-enforcement` = `j vote against business`,
+         `anti-enforcement` = `j vote for business`) %>%
+  ungroup() %>%
+  mutate(five_avg = rollmean(score, 7, align = "center", fill = 0)) %>%
+  relocate(five_avg) %>%
+  filter(five_avg > 0) 
+
+bf_scores_roll_mean %>%
+  left_join(court_bf_score, by = c("term" = "court_term")) %>%
+  select(five_avg, term, bf_score) %>%
+  pivot_longer(!term, names_to = "scoreType", values_to = "score") %>%
+  ggplot(aes(x = term, y = score, color = scoreType)) + geom_line() 
+```
+```{r roll mean bf_nyt - justice}
+justice_bf_nyt_scores_roll_mean = bf_scores_read %>%
+  filter(BusinessLitigant == "1. business is Petitioner OR respondent" &
+           nytSalience == 1) %>%
+  group_by(term, JVoteForBusiness) %>%
+  summarise(votes = n()) %>%
+ # filter(!is.na(JVoteForBusiness)) %>%
+  pivot_wider(names_from = JVoteForBusiness, values_from = votes) %>%
+    replace(is.na(.), 0) %>%
+  mutate(total_votes = `j vote against business` + `j vote for business`,
+         score = round(`j vote for business`/(`j vote against business` + `j vote for business`), 3)) %>%
+  mutate(score_type = "bf_nyt") %>%
+  rename(`pro-enforcement` = `j vote against business`,
+         `anti-enforcement` = `j vote for business`) %>%
+  ungroup() %>%
+  mutate(five_avg = rollmean(score, 20, align = "center", fill = 0)) %>%
+  relocate(five_avg) %>%
+  filter(five_avg > 0) 
+
+
+justice_bf_nyt_scores_roll_mean %>%
+  left_join(court_bf_nyt_score, by = c("term" = "court_term")) %>%
+  select(five_avg, term, bf_nyt_score) %>%
+  pivot_longer(!term, names_to = "scoreType", values_to = "score") %>%
+  ggplot(aes(x = term, y = score, color = scoreType)) + geom_line() 
+```
+
 
 ### Merging list of antitrust cases with justice votes cases
 
@@ -378,8 +429,6 @@ justice_monopoly_score = justice_monopoly_scores_raw %>%
   ungroup() %>%
   mutate(justice = str_extract(justice, "[A-Z]+[a-z]+[0-9]*")) %>%
   rename(justiceName = justice)
-
-
 ```
 
 
@@ -516,7 +565,20 @@ justice_scores = justice_monopoly_score %>%
   rename(score_type = type_case_score) %>%
   bind_rows(justice_bf_scores, justice_bf_nyt_scores) %>%
   left_join(select(sc_judge, Party, era, justiceName)) %>%
-  mutate(total_votes = `pro-enforcement` + `anti-enforcement`)
+  mutate(total_votes = `pro-enforcement` + `anti-enforcement`) %>%
+  mutate(justiceLastName = case_when(justiceName == "SDOConnor" ~ "O'Connor",
+                                     T ~ str_extract(justiceName, "[A-Z][a-z]+"))) 
+
+
+justice_scores %>%
+  select(justiceLastName, justiceName) %>%
+  group_by(justiceLastName) %>%
+  summarise(count= n()) %>%
+  filter(count != 5)
+
+justice_scores %>%
+  filter(justiceLastName == "Vinson")
+
 
 
 ```
@@ -545,12 +607,12 @@ All statistics only include justices appointed post-1945.
 
 justice_scores %>%
   filter(score_type == "bf" | score_type == "bf_nyt") %>%
-  select(Party, score, score_type, justiceName) %>%
+  select(Party, score, score_type, justiceName, justiceLastName) %>%
   pivot_wider(names_from = "score_type", values_from = "score") %>%
   group_by(Party) %>%
   summarise(bf_mean = round(mean(bf, na.rm = T), digits = 3),
             nyt_mean = round(mean(bf_nyt, na.rm = T), digits = 3)) %>%
-  kable()
+  kable(., "latex", booktabs = T)
 
 
 ```
@@ -560,7 +622,7 @@ justice_scores %>%
 ### Grouped by era:
 
 High enforcement: 1945-1975.
-Low enforcement: 1976-2009
+Low enforcement: 1976-2020.
 
 ```{r bf by era}
 
@@ -571,7 +633,10 @@ justice_scores %>%
   group_by(era) %>%
   summarise(bf_mean = round(mean(bf, na.rm = T), 3),
             nyt_mean = round(mean(bf_nyt, na.rm = T), 3)) %>%
-  kable()
+  rename(Era = era,
+         `Business-friendliness mean` = bf_mean,
+         `NYT business cases mean` = nyt_mean)
+  kable(., "latex", booktabs = T) 
 ```
 
 
@@ -586,7 +651,7 @@ justice_scores %>%
   group_by(Party, era) %>%
   summarise(bf_mean = round(mean(bf, na.rm = T), 3),
             nyt_mean = round(mean(bf_nyt, na.rm = T), 3)) %>%
-  kable()
+  kable(., "latex", booktabs = T)
 
 ```
 
@@ -619,7 +684,7 @@ court_scores %>%
   geom_boxplot(aes(x = chief_term, y = bf_score, fill = chief_term)) +
     labs(x = "Court Term", y = "Business-friendliness score", 
        title = "Business-friendliness score of SCT by Chief Era",
-       color = "Chief Era") 
+       fill = "Chief Era") 
 ```
 
 
@@ -687,11 +752,11 @@ court_scores %>%
 
 
 ```{r pe + gov + plb score distribution figures}
-justice_monopoly_score %>%
-  mutate(height = runif(n = 101, min = 0, max = 10)) %>%
-  filter(type_case_score == "pe_score") %>%
+justice_scores %>%
+  mutate(height = runif(n = 169, min = 0, max = 10)) %>%
+  filter(score_type == "pe_score") %>%
   ggplot() + geom_histogram(aes(x = score), bins = 6) + 
-  geom_text(aes(x = score, y = height, label = justiceName, color = "blue"), check_overlap = T) +
+  geom_text(aes(x = score, y = height, label = justiceLastName, color = "blue"), check_overlap = T) +
     labs(title = "Proportion of pro-enforcement votes", 
          x = "Pro-enforcement score",  
          y = "Count of justices",
@@ -700,11 +765,11 @@ justice_monopoly_score %>%
   theme(legend.position = "none") 
 
 
-justice_monopoly_score %>%
-  mutate(height = runif(n = 101, min = 0, max = 10)) %>%
-  filter(type_case_score == "gov_score") %>%
+justice_scores %>%
+  mutate(height = runif(n = 169, min = 0, max = 10)) %>%
+  filter(score_type == "gov_score") %>%
   ggplot() + geom_histogram(aes(x = score), bins = 6) + 
-  geom_text(aes(x = score, y = height, label = justiceName, color = "blue"), check_overlap = T) +
+  geom_text(aes(x = score, y = height, label = justiceLastName, color = "blue"), check_overlap = T) +
     labs(title = "Proportion of votes friendly to the government", 
          x = "Pro-government score",
          y = "Count of justices",
@@ -712,15 +777,15 @@ justice_monopoly_score %>%
   theme_classic() + 
   theme(legend.position = "none") 
 
-justice_monopoly_score %>%
-    mutate(height = runif(n = 101, min = 0, max = 10)) %>%
-  filter(type_case_score == "psb_score") %>%
+justice_scores %>%
+    mutate(height = runif(n = 169, min = 0, max = 10)) %>%
+  filter(score_type == "psb_score") %>%
   ggplot() + geom_histogram(aes(x = score), bins = 6) +
-  geom_text(aes(x = score, y = height, label = justiceName, color = "red"), 
+  geom_text(aes(x = score, y = height, label = justiceLastName, color = "red"), 
             check_overlap = T) +
     theme_classic() + 
   theme(legend.position = "none") +
-    labs(title = "Proportion of pro-large-business votes",
+    labs(title = "Proportion of pro-small-business votes",
          x = "Pro-small business score",
          y = "Count of justices",
          color = "Justice names")
@@ -732,7 +797,7 @@ justice_monopoly_score %>%
 justice_scores %>%
   left_join(select(justice_per_court, c(justiceName, Party, era))) %>%
   filter(score_type == "pe_score" | score_type == "psb_score") %>%
-  select(justiceName, score_type, score, era, Party) %>%
+  select(justiceName, score_type, score, era, Party, justiceLastName) %>%
   pivot_wider(names_from = score_type, values_from = score) %>%
   mutate(score_diff_dir = case_when(pe_score-psb_score > 0 ~ "Greater pro-enforcement score",
                                     T ~ "Greater pro-large business score")) %>%
@@ -743,12 +808,12 @@ justice_scores %>%
                       "low enforcement" = "Low enforcement",
                       "high enforcement" = "High enforcement")) %>%
   mutate(Party = recode(Party, 'D' = 'Democrat', 'R' = 'Republican')) %>%
-  ggplot() + geom_line(aes(x = value, y = justiceName, color = era)) +
-  geom_point(aes(x = value, y = justiceName, shape = name)) +
+  ggplot() + geom_line(aes(x = value, y = justiceLastName, color = era)) +
+  geom_point(aes(x = value, y = justiceLastName, shape = name)) +
   labs(x = "Score", y = "Justice", 
        color = "Era", shape = "Score",
        title = "Pro-small business and pro-enforcement friendliness by justice") + theme_minimal() +
-  facet_wrap(vars(Party), scales = "free_y")
+  facet_wrap(vars(Party), scales = "free_y") +   theme(legend.position="bottom", legend.box="vertical", legend.margin=margin())
 ggsave(path = fig.path, "sct_justice_monopoly_score_ae_plb_faceted_party_era.png")
 
   
@@ -771,15 +836,15 @@ ggsave(path = fig.path, "sct_justice_monopoly_score_ae_plb_faceted_party_era.png
 
 justice_scores %>%
   filter(score_type == "pe_score" | score_type == "bf") %>%
-  select(justiceName, score_type, score, Party, era) %>%
+  select(justiceName, score_type, score, Party, era, justiceLastName) %>%
   pivot_wider(names_from = score_type, values_from = score) %>%
   mutate(diff_direction = case_when(bf- pe_score > 0 ~ "Greater business-friendliness",
                                     T ~ "Greater pro-enforcement score")) %>%
   pivot_longer(pe_score: bf) %>%
   mutate(name = recode(name, "pe_score" = "Pro-enforcement", 
                        "bf" = "Business-friendliness")) %>%
-  ggplot() + geom_line(aes(x = value, y = justiceName, color = diff_direction)) +
-  geom_point(aes(x = value, y = justiceName, shape = name)) +
+  ggplot() + geom_line(aes(x = value, y = justiceLastName, color = diff_direction)) +
+  geom_point(aes(x = value, y = justiceLastName, shape = name)) +
     labs(x = "Score", y = "Justice", 
          color = "Direction of difference", shape = "Score",
          title = "Business and pro-enforcement friendliness by justice") +
@@ -791,7 +856,7 @@ justice_scores %>%
 
 justice_scores %>%
   filter(score_type == "pe_score" | score_type == "bf") %>%
-  select(justiceName, score_type, score, Party, era) %>%
+  select(justiceName, score_type, score, Party, era, justiceLastName) %>%
   pivot_wider(names_from = score_type, values_from = score) %>%
   mutate(diff_direction = case_when(bf- pe_score > 0 ~ "Greater business-friendliness",
                                     T ~ "Greater pro-enforcement score")) %>%
@@ -799,8 +864,8 @@ justice_scores %>%
   mutate(name = recode(name, "pe_score" = "Pro-enforcement", 
                        "bf" = "Business-friendliness")) %>%
   mutate(Party = recode(Party, 'D' = 'Democrat', 'R' = 'Republican')) %>%
-  ggplot() + geom_line(aes(x = value, y = justiceName, color = diff_direction)) +
-  geom_point(aes(x = value, y = justiceName, shape = name)) +
+  ggplot() + geom_line(aes(x = value, y = justiceLastName, color = diff_direction)) +
+  geom_point(aes(x = value, y = justiceLastName, shape = name)) +
     labs(x = "Score", y = "Justice", 
          color = "Direction of difference", shape = "Score",
          title = "Business and pro-enforcement friendliness by justice") +
@@ -811,9 +876,9 @@ ggsave(path = fig.path, "sct_justice_monopoly_score_ae_bf_faceted_party_era.png"
   
 justice_scores %>%
   filter(score_type == "gov_score" | score_type == "bf") %>%
-  select(justiceName, score_type, score, Party, era) %>%
+  select(justiceName, justiceLastName, score_type, score, Party, era) %>%
   pivot_wider(names_from = score_type, values_from = score) %>%
-  select(justiceName, gov_score, bf, Party, era) %>%
+  #select(justiceName, gov_score, bf, Party, era) %>%
   pivot_longer(gov_score: bf) %>%
   mutate(name = recode(name, "gov_score" = "Pro-government", 
                        "bf" = "Business-friendliness")) %>%
@@ -821,18 +886,18 @@ justice_scores %>%
                           "low enforcement" = "Low enforcement",
                           "high enforcement" = "High enforcement")) %>%
   mutate(Party = recode(Party, 'D' = 'Democrat', 'R' = 'Republican')) %>%
-  ggplot() + geom_line(aes(x = value, y = justiceName, color = era)) +
-  geom_point(aes(x = value, y = justiceName, shape = name)) +
+  ggplot() + geom_line(aes(x = value, y = justiceLastName, color = era)) +
+  geom_point(aes(x = value, y = justiceLastName, shape = name)) +
     labs(x = "Score", y = "Justice", 
          color = "Era", shape = "Score",
-         title = "Business friendliness and government hostility by justice") + theme_minimal() +
+         title = "Business and government friendliness by justice") + theme_minimal() +
   facet_wrap(vars(Party), scales = "free_y") 
 ggsave(path = fig.path, "sct_justice_monopoly_score_gov_bf_faceted_party_era.png")
 
 
 justice_scores %>%
   filter(score_type == "pe_score" | score_type == "bf") %>%
-  select(justiceName, score_type, score, Party, era) %>%
+  select(justiceName, justiceLastName, score_type, score, Party, era) %>%
   pivot_wider(names_from = score_type, values_from = score) %>%
   mutate(diff_direction = case_when(bf- pe_score > 0 ~ "Greater business-friendliness",
                                     T ~ "Greater pro-enforcement score")) %>%
@@ -840,8 +905,8 @@ justice_scores %>%
   mutate(name = recode(name, "pe_score" = "Pro-enforcement", 
                        "bf" = "Business-friendliness")) %>%
   mutate(Party = recode(Party, 'D' = 'Democrat', 'R' = 'Republican')) %>%
-  ggplot() + geom_line(aes(x = value, y = justiceName, color = diff_direction)) +
-  geom_point(aes(x = value, y = justiceName, shape = name)) +
+  ggplot() + geom_line(aes(x = value, y = justiceLastName, color = diff_direction)) +
+  geom_point(aes(x = value, y = justiceLastName, shape = name)) +
     labs(x = "Score", y = "Justice", 
          color = "Direction of difference", shape = "Score",
          title = "Business and pro-enforcement friendliness by justice") +
@@ -853,7 +918,7 @@ justice_scores %>%
 
 justice_scores %>%
   filter(score_type == "pe_score" | score_type == "bf") %>%
-  select(justiceName, score_type, score, Party, era) %>%
+  select(justiceName, justiceLastName, score_type, score, Party, era) %>%
   pivot_wider(names_from = score_type, values_from = score) %>%
   mutate(diff_direction = case_when(bf- pe_score > 0 ~ "Greater business-friendliness",
                                     T ~ "Greater pro-enforcement score")) %>%
@@ -861,8 +926,8 @@ justice_scores %>%
   mutate(name = recode(name, "pe_score" = "Pro-enforcement", 
                        "bf" = "Business-friendliness")) %>%
   mutate(Party = recode(Party, 'D' = 'Democrat', 'R' = 'Republican')) %>%
-  ggplot() + geom_line(aes(x = value, y = justiceName, color = diff_direction)) +
-  geom_point(aes(x = value, y = justiceName, shape = name)) +
+  ggplot() + geom_line(aes(x = value, y = justiceLastName, color = diff_direction)) +
+  geom_point(aes(x = value, y = justiceLastName, shape = name)) +
     labs(x = "Score", y = "Justice", 
          color = "Direction of difference", shape = "Score",
          title = "Business and pro-enforcement friendliness by justice") +
@@ -888,7 +953,7 @@ court_scores %>%
   theme_classic() +
   labs(x = "Court Term", y = "Average score",
        title = "Average measure of pro-enforcement and pro-large company bias over time",
-       color = "Case sample") 
+       color = "Case sample") +   theme(legend.position="bottom", legend.box="vertical", legend.margin=margin())
 
 
 ```
@@ -997,14 +1062,57 @@ court_scores %>%
 
 
 ## Monopoly-friendliness of majOpinWriter
-```{r cf of majOpinWriter}
+```{r}
+test = justice_votes %>%
+  select(majOpinWriter, year) %>%
+  filter(!is.na(majOpinWriter)) %>%
+  inner_join(justice_numbers_tbl, by = c("majOpinWriter" = "justiceNumber")) %>%
+  left_join(filter(justice_scores, score_type == "pe_score"), by = "justiceName") %>%
+  filter(!is.na(score_type)) %>% #Kavanaugh and Gorsuch don't have bf or psb score
+  group_by(year) %>%
+  summarise(year = mean(year), score = mean(score, na.rm = T)) 
+
+
+
+  test_lm = lm(data = test, score ~ year)
+summary(test_lm)
+
+
+  ggplot(aes(x = year, y = score)) + 
+  geom_smooth(color = "black", method = "lm") + 
+  geom_point() + 
+  labs(x = "Court Term", y = "Mean",
+           title = "Mean pro-enforcement scores of SCT opinion authors over time") +
+  theme_classic()
+
+```
+```{r}
+justice_votes %>%
+  select(majOpinWriter, year) %>%
+  filter(!is.na(majOpinWriter)) %>%
+  inner_join(justice_numbers_tbl, by = c("majOpinWriter" = "justiceNumber")) %>%
+  left_join(filter(justice_scores, score_type == "pe_score"), by = "justiceName") %>%
+  filter(!is.na(score_type)) %>% #Kavanaugh and Gorsuch don't have bf or psb score
+  group_by(year) %>%
+  summarise(year = mean(year), score = mean(score, na.rm = T)) %>%
+  ggplot(aes(x = year, y = score)) + 
+  geom_smooth(color = "black", method = "glm") + 
+  geom_point() + 
+  labs(x = "Court Term", y = "Mean",
+           title = "Mean pro-enforcement scores of SCT opinion authors over time") +
+  theme_classic()
+
+```
+
+
+```{r psb of majOpinWriter}
 
 justice_votes %>%
   select(majOpinWriter, year) %>%
   filter(!is.na(majOpinWriter)) %>%
   inner_join(justice_numbers_tbl, by = c("majOpinWriter" = "justiceNumber")) %>%
   left_join(filter(justice_scores, score_type == "pe_score"), by = "justiceName") %>%
-  filter(year < 2019) %>% #Kavanaugh and Gorsuch don't have cf or bcf
+  filter(!is.na(score_type)) %>% #Kavanaugh and Gorsuch don't have bf or psb score
   group_by(year) %>%
   summarise(year = mean(year), score = mean(score, na.rm = T)) %>%
   ggplot(aes(x = year, y = score)) + 
@@ -1021,16 +1129,16 @@ justice_votes %>%
   left_join(pivot_wider(select(justice_scores, justiceName, score_type, score), 
                         names_from = score_type,
                         values_from = score)) %>%
-  filter(year < 2019) %>% #Kavanaugh and Gorsuch don't have cf or bcf
+  filter(justiceName != "BMKavanaugh" | justiceName != "NMGorsuch") %>% #Kavanaugh and Gorsuch don't have bf or psb score
   group_by(year) %>%
-  summarise(ae_mean = mean(pe_score, na.rm = T), 
-            plb_mean = mean(psb_score, na.rm = T),
+  summarise(pe_mean = mean(pe_score, na.rm = T), 
+            psb_mean = mean(psb_score, na.rm = T),
             gov_mean = mean(gov_score, na.rm = T),
             bf_mean = mean(bf, na.rm = T)) %>%
   pivot_longer(!year) %>%
-  mutate(name = recode(name, "plb_mean" = "Pro-small business",
+  mutate(name = recode(name, "psb_mean" = "Pro-small business",
                               "bf_mean" = "Business-friendliness",
-                              "ae_mean" = "Pro-enforcement",
+                              "pe_mean" = "Pro-enforcement",
                               "gov_mean" = "Pro-government")) %>% 
   ggplot() + geom_point(aes(x = year, y = value, color = name)) + 
     geom_smooth(aes(x = year, y = value, color = name), method = lm) + 
@@ -1171,17 +1279,17 @@ court_scores %>%
 ```{r}
 justice_scores_tbl = justice_scores %>%
   mutate(total_votes = `pro-enforcement` + `anti-enforcement`) %>%
-  select(justiceName, score_type, score, total_votes, Party, era) %>%
+  select(justiceName, justiceLastName, score_type, score, total_votes, Party, era) %>%
   mutate(score = round(score, digits = 3)) %>%
   pivot_wider(names_from = score_type, values_from =c(score, total_votes))
 
 justice_scores_tbl %>%
   select(-Party, -era) %>%
-  select(justiceName, score_pe_score, total_votes_pe_score,
+  select(justiceLastName, score_pe_score, total_votes_pe_score,
          score_gov_score, total_votes_gov_score,
          score_psb_score, total_votes_psb_score,
          score_bf, total_votes_bf) %>%
-  rename(`Justice Name` = justiceName,
+  rename(`Justice Name` = justiceLastName,
          `Pro-enforcement score` = (score_pe_score),
          `Count of votes in pro-enforcement score` = total_votes_pe_score,
          `Pro-government score` = (score_gov_score),
@@ -1239,6 +1347,162 @@ justice_scores_tbl %>%
 
 ```
 
+
+
+## Frequency of types of cases
+```{r}
+
+antitrust_westlaw_sc_cases %>%
+  group_by(year, scoreType) %>%
+  summarise(count= n())
+
+antitrust_westlaw_sc_cases %>%
+  select(year, scoreType) %>%
+  mutate(scoreType = case_when(scoreType == "govCase" ~ "Government litigant",
+                               scoreType == "plb" ~ "Company vs. company",
+                            T ~ "Other")) %>%
+  group_by(year) %>%
+  ggplot(aes(x = year, fill = scoreType)) + 
+  geom_bar(position = "stack") + 
+  theme_classic() + theme(legend.position = "bottom", legend.title = element_blank()) +
+  labs(title = "Supreme Court antitrust litigants", 
+       x = "Court Term",
+       y = "Count") +
+    scale_y_continuous(breaks= breaks_pretty())
+  
+```
+
+
+## Win-loss graphs
+```{r antitrust enforcement all cases}
+antitrust_westlaw_sc_cases %>%
+  select(year, proAntitrustEnforcement) %>%
+  group_by(year) %>%
+  ggplot(aes(x = year, fill = proAntitrustEnforcement)) + 
+  geom_bar(position = "stack") + 
+  theme_classic() + theme(legend.position = "bottom", legend.title = element_blank()) +
+  labs(title = "Win-loss ratio of Supreme Court antitrust cases", 
+       x = "Court Term",
+       y = "Count") +
+    scale_y_continuous(breaks= breaks_pretty())
+
+# by year
+antitrust_westlaw_sc_cases %>%
+  mutate(decade = as.integer(paste0(str_extract(year, "[0-9]{3}"), "0"))) %>%
+  select(year, proAntitrustEnforcement) %>%
+  group_by(year, proAntitrustEnforcement) %>%
+  summarise(rate = n()) %>%
+  pivot_wider(names_from = "proAntitrustEnforcement", values_from = "rate") %>%
+  replace(is.na(.), 0) %>%
+  mutate(pro_enforce_perc = Yes/ (No + Yes)) %>%
+  
+  ggplot(aes(x = year, y = pro_enforce_perc)) + geom_point() +
+  theme_classic() + theme(legend.position = "bottom", legend.title = element_blank()) +
+  labs(title = "Win-loss ratio of antitrust cases", 
+       x = "Court Term",
+       y = "Percent of cases that expand enforcement") +
+    scale_y_continuous(breaks= breaks_pretty())
+  
+
+  
+# by decade
+antitrust_westlaw_sc_cases %>%
+  mutate(decade = as.integer(paste0(str_extract(year, "[0-9]{3}"), "0"))) %>%
+  select(decade, proAntitrustEnforcement) %>%
+  group_by(decade, proAntitrustEnforcement) %>%
+  summarise(rate = n()) %>%
+  pivot_wider(names_from = "proAntitrustEnforcement", values_from = "rate") %>%
+  replace(is.na(.), 0) %>%
+  mutate(pro_enforce_perc = Yes/ (No + Yes)) %>%
+
+  ggplot(aes(x = decade, y = pro_enforce_perc)) + geom_point() +
+  theme_classic() + theme(legend.position = "bottom", legend.title = element_blank()) +
+  labs(title = "Win-loss ratio of antitrust cases", 
+       x = "Court Term",
+       y = "Percent of cases that expand enforcement") +
+    scale_y_continuous(breaks= breaks_pretty())
+  
+  
+  
+  
+  
+```
+
+```{r win loss plb}
+#by year
+antitrust_westlaw_sc_cases %>%
+  filter(scoreType == "plb") %>%
+  mutate(decade = as.integer(paste0(str_extract(year, "[0-9]{3}"), "0"))) %>%
+  select(year, proAntitrustEnforcement) %>%
+  group_by(year, proAntitrustEnforcement) %>%
+  summarise(rate = n()) %>%
+  pivot_wider(names_from = "proAntitrustEnforcement", values_from = "rate") %>%
+  replace(is.na(.), 0) %>%
+  mutate(pro_enforce_perc = Yes/ (No + Yes)) %>%
+  ggplot(aes(x = year, y = pro_enforce_perc)) + geom_point() +
+  theme_classic() + theme(legend.position = "bottom", legend.title = element_blank()) +
+  labs(title = "Win-loss ratio of antitrust cases", 
+       x = "Court Term",
+       y = "Percent of business vs. business cases that expand enforcement") +
+    scale_y_continuous(breaks= breaks_pretty())
+
+#by decade
+antitrust_westlaw_sc_cases %>%
+  filter(scoreType == "plb") %>%
+  mutate(decade = as.integer(paste0(str_extract(year, "[0-9]{3}"), "0"))) %>%
+  select(decade, proAntitrustEnforcement) %>%
+  group_by(decade, proAntitrustEnforcement) %>%
+  summarise(rate = n()) %>%
+  pivot_wider(names_from = "proAntitrustEnforcement", values_from = "rate") %>%
+  replace(is.na(.), 0) %>%
+  mutate(pro_enforce_perc = Yes/ (No + Yes)) %>%
+  ggplot(aes(x = decade, y = pro_enforce_perc)) + geom_point() +
+  theme_classic() + theme(legend.position = "bottom", legend.title = element_blank()) +
+  labs(title = "Win-loss ratio of antitrust cases", 
+       x = "Court Term",
+       y = "Percent of business vs. business cases that expand enforcement") +
+    scale_y_continuous(breaks= breaks_pretty())
+```
+
+```{r win loss govCase}
+
+
+#by year
+antitrust_westlaw_sc_cases %>%
+  filter(scoreType == "govCase") %>%
+  mutate(decade = as.integer(paste0(str_extract(year, "[0-9]{3}"), "0"))) %>%
+  select(year, proAntitrustEnforcement) %>%
+  group_by(year, proAntitrustEnforcement) %>%
+  summarise(rate = n()) %>%
+  pivot_wider(names_from = "proAntitrustEnforcement", values_from = "rate") %>%
+  replace(is.na(.), 0) %>%
+  mutate(pro_enforce_perc = Yes/ (No + Yes)) %>%
+  ggplot(aes(x = year, y = pro_enforce_perc)) + geom_point() +
+  theme_classic() + theme(legend.position = "bottom", legend.title = element_blank()) +
+  labs(title = "Win-loss ratio of antitrust cases", 
+       x = "Court Term",
+       y = "Percent of cases involving the government that expand enforcement") +
+    scale_y_continuous(breaks= breaks_pretty())
+  
+#by decade
+antitrust_westlaw_sc_cases %>%
+  filter(scoreType == "govCase") %>%
+  mutate(decade = as.integer(paste0(str_extract(year, "[0-9]{3}"), "0"))) %>%
+  select(decade, proAntitrustEnforcement) %>%
+  group_by(decade, proAntitrustEnforcement) %>%
+  summarise(rate = n()) %>%
+  pivot_wider(names_from = "proAntitrustEnforcement", values_from = "rate") %>%
+  replace(is.na(.), 0) %>%
+  mutate(pro_enforce_perc = Yes/ (No + Yes)) %>%
+  ggplot(aes(x = decade, y = pro_enforce_perc)) + geom_point() +
+  theme_classic() + theme(legend.position = "bottom", legend.title = element_blank()) +
+  labs(title = "Win-loss ratio of antitrust cases", 
+       x = "Court Term",
+       y = "Percent of cases involving the government that expand enforcement") +
+    scale_y_continuous(breaks= breaks_pretty())
+  
+  
+```
 
 
 

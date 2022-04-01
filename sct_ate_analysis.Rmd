@@ -643,6 +643,88 @@ court_plb_score_top5_ends2015 = justice_monopoly_score %>%
 ```
 
 
+## Summary mean of overall business friendliness score (bf) and business friendliness score of business-related cases appearing in the NYT (nyt)
+
+All statistics only include justices appointed post-1945. 
+
+### Inclusive of all cases:
+```{r bf by party}
+
+justice_scores %>%
+  filter(score_type == "bf" | score_type == "bf_nyt") %>%
+  select(Party, score, score_type, justiceName, justiceLastName) %>%
+  pivot_wider(names_from = "score_type", values_from = "score") %>%
+  group_by(Party) %>%
+  summarise(`Business-friendliness mean` = round(mean(bf, na.rm = T), digits = 3),
+            `Business-friendliness mean of NYT cases` = round(mean(bf_nyt, na.rm = T), digits = 3)) #%>%
+ # kable(., "latex", booktabs = T)
+
+
+```
+
+```{r}
+#testing diff in parties
+justice_scores %>%
+  filter(score_type == "bf" | score_type == "bf_nyt") %>%
+  select(Party, score, score_type) %>%
+  group_by(Party, score_type) %>%
+  summarise(val = list(score)) %>%
+  pivot_wider(names_from = Party, values_from = val) %>%
+  group_by(score_type) %>%
+  mutate(p_value = t.test(unlist(D), unlist(R))$p.value,
+         t_value = t.test(unlist(D), unlist(R))$statistic,
+         D_mean = round(mean(unlist(D), na.rm = T), 3),
+         R_mean = round(mean(unlist(R)), 3)) %>%
+  select(score_type, D_mean, R_mean, t_value, p_value) 
+
+  
+  
+
+
+```
+
+
+### Grouped by era:
+
+High enforcement: 1945-1975.
+Low enforcement: 1976-2019.
+
+```{r bf by era}
+
+justice_scores %>%
+  filter(score_type == "bf" | score_type == "bf_nyt") %>%
+  select(era, score, score_type, justiceName) %>%
+  pivot_wider(names_from = "score_type", values_from = "score") %>%
+  group_by(era) %>%
+  summarise(bf_mean = round(mean(bf, na.rm = T), 3),
+            nyt_mean = round(mean(bf_nyt, na.rm = T), 3)) %>%
+  rename(Era = era,
+         `Business-friendliness mean` = bf_mean,
+         `NYT business cases mean` = nyt_mean) %>%
+  kable(., "latex", booktabs = T) 
+```
+
+
+### Grouped by era and party:
+
+```{r summary of bf grouped by party and era}
+
+justice_scores %>%
+  filter(score_type == "bf" | score_type == "bf_nyt") %>%
+  select(era, Party, score, score_type, justiceName) %>%
+  pivot_wider(names_from = "score_type", values_from = "score") %>%
+  group_by(Party, era) %>%
+  summarise(`Business-friendliness mean` = round(mean(bf, na.rm = T), 3),
+            `Business-friendliness mean of NYT cases` = round(mean(bf_nyt, na.rm = T), 3)) %>%
+  rename(Era = era) %>%
+  kable(., "latex", booktabs = T)
+
+```
+
+
+
+
+
 ## Court scores over time
 ```{r 3(1) bf score over time}
 
@@ -691,7 +773,9 @@ justice_scores %>%
   geom_point(aes(x = value, y = justiceTitle, shape = name)) +
   labs(x = "Score", y = "Justice", 
       shape = "Score",
-       title = "Pro-large business and anti-enforcement\n friendliness by Justice") + theme_minimal() +
+      title = "Pro-large business and anti-enforcement\n friendliness by Justice",
+      caption = "Voting data from the Supreme Court Database (20201 Version 1)") + 
+  theme_minimal() +
   facet_wrap(vars(Party), scales = "free_y") +   
   theme(legend.position="bottom", legend.box="vertical", legend.margin=margin(),
         axis.title.x = element_blank(), axis.title.y = element_blank()) +
@@ -723,7 +807,7 @@ justice_scores %>%
   geom_point(aes(x = value, y = justiceTitle, shape = name)) +
     labs(x = "Score", y = "Justice", shape = "Score",
          title = "Business-friendliness and anti-government\n scores by Justice",
-                caption = "Business-friendliness data from Epstein, Landes, and Posner (2013)") +
+                caption = "Business-friendliness data from Epstein, Landes, and Posner (2013);\nVoting data from the Supreme Court Database (20201 Version 1)") +
   theme_minimal() +
   facet_wrap(vars(Party), scales = "free_y") + 
   theme(legend.position="bottom", legend.box="vertical", legend.margin=margin(),  
@@ -760,7 +844,7 @@ justice_scores %>%
   geom_point(aes(x = value, y = justiceTitle, shape = name)) +
     labs(x = "Score", y = "Justice", shape = "Score",
          title = "All scores by Justice", 
-         caption = "Business-friendliness data from Epstein, Landes, and Posner (2013)")+ 
+         caption = "Business-friendliness data from Epstein, Landes, and Posner (2013);\nVoting data from the Supreme Court Database (20201 Version 1)")+ 
   theme_minimal() +
   facet_wrap(vars(Party), scales = "free_y") + 
   theme(legend.position="bottom", legend.box="vertical", 
@@ -792,7 +876,9 @@ court_monopoly_justice_score_ends2016 %>%
       scale_color_grey(start = 0, end = 0.8) + 
   labs(x = "Court Term", y = "Moving average score",
        title = "Moving average measures of the Court's pro-enforcement,\npro-government, and pro-small company bias over\ntime (by justice profile)",
-       color = "Case sample") +   theme(legend.position="bottom", legend.box="vertical", legend.margin=margin()) 
+       color = "Case sample",
+      caption = "Voting data from the Supreme Court Database (20201 Version 1)") +   
+  theme(legend.position="bottom", legend.box="vertical", legend.margin=margin()) 
 
 ```
 ```{r 12(1) pe/psb/pg over time figures (by year justice) - excludes 2016}
@@ -812,7 +898,9 @@ court_justice_scores %>%
     scale_color_grey(start = 0, end = 0.8) + 
   labs(x = "Court Term", y = "Moving average score",
        title = "Moving average measures of the Court's pro-enforcement, pro-government,\n and pro-small company bias over time (by justice profile)",
-       color = "Case sample") +   theme(legend.position="bottom", legend.box="vertical", legend.margin=margin()) 
+       color = "Case sample",
+      caption = "Voting data from the Supreme Court Database (20201 Version 1)") +  
+  theme(legend.position="bottom", legend.box="vertical", legend.margin=margin()) 
 
 ```
 
@@ -832,7 +920,8 @@ court_ae_score_top5_woutGorKav %>%
   theme_classic() +
   labs(x = "Court Term", y = "Mean", 
        title = "Moving average of the top five anti-enforcement and pro-large\n company bias scores over SCT terms",
-       color = "Score") 
+       color = "Score",
+      caption = "Voting data from the Supreme Court Database (20201 Version 1)") 
 
 ```
 
@@ -852,7 +941,8 @@ court_ae_score_top5_ends2015 %>%
   theme_classic() +
   labs(x = "Court Term", y = "Mean", 
        title = "Moving average of top five anti-enforcement and pro-large\n company bias scores over SCT terms",
-       color = "Score") 
+       color = "Score",
+      caption = "Voting data from the Supreme Court Database (20201 Version 1)") 
 
 ```
 
@@ -868,7 +958,7 @@ antitrust_westlaw_sc_cases %>%
   geom_bar(aes(x = year, fill = proAntitrustEnforcement_f), position = "stack") + 
   scale_fill_manual(values = c("Yes" = "green4", "No" = "red")) + 
   theme_classic() + theme(legend.position = "bottom") +
-  labs(title = "Expanding to diminishing enforcement ratio of Supreme Court antitrust cases", 
+  labs(title = "Expanding to diminishing enforcement ratio of Supreme Court\nantitrust cases", 
        x = "Court Term",
        y = "Count",
        fill = "Expands enforcement?") +
@@ -892,14 +982,9 @@ justice_votes %>%
   geom_smooth(color = "black", method = "lm") + 
   geom_point() + 
   labs(x = "Court Term", y = "Mean",
-           title = "Mean pro-enforcement scores of SCT opinion authors over time") +
+           title = "Mean pro-enforcement scores of SCT opinion authors over time",
+      caption = "Authorship and voting data from the Supreme Court Database (20201 Version 1)") +
   theme_classic()
 
 ```
 
-I want to test this and see if
-```{r}
-print(1)
-```
-
-I want to test this a second time. 

@@ -1,0 +1,901 @@
+---
+title: "Antitrust enforcement: SCT analysis - Final"
+author: "Sima Biondi"
+date: "3/31/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = F, message = F)
+library(knitr)
+library(dplyr)
+library(ggplot2)
+library(readxl)
+library(tidyr)
+library(stringr)
+library(tidyverse)
+library(purrr)
+library(RColorBrewer)
+library(data.table)
+library(rvest)
+library(kableExtra)
+library(scales)
+library(zoo)
+
+options(warn = -1)
+fig.path = here::here("figs/sct")
+
+```
+
+
+```{r read}
+sc_judge_read = read_excel("data/Supreme Court Chart.xlsx", sheet = "Business friendliness")
+justice_per_court_read = read_csv("data/SCDB_2021_01_justiceCentered_Citation_sb.csv",
+                             col_types = cols())
+antitrust_westlaw_sc_cases_sherman = read.csv("data/03 2 2022 - post51_sct_antitrust_cases_sherman_coded.csv")
+
+antitrust_westlaw_sc_cases_clayton = read.csv("data/03 2 2022 - post51_sct_antitrust_cases_clayton_coded.csv")
+
+westlaw_sherman_search_df = read_csv("data/Westlaw Edge - List of 677 results for advanced (Sherman Act OR Sherman Antitrust Act).csv")
+
+bf_scores_read = read_csv("data/Business2020_sb1.csv")
+
+
+# ------ Datasets to create antitrust case dataset
+#additional_cases_antitrust_read = read_csv("data/additional_cases_antitrust_sc_changed.csv")
+#brannon_ginsburg_df_read = read_excel("data/brannon_ginsburg_data.xlsx")
+
+```
+
+```{r clean SCT cases}
+antitrust_westlaw_sc_cases = antitrust_westlaw_sc_cases_sherman %>%
+  mutate(statuteType = "sherman") %>%
+  full_join(antitrust_westlaw_sc_cases_clayton) %>%
+  mutate(statuteType = ifelse(is.na(statuteType), "clayton", statuteType)) %>%
+  filter(str_detect(INCLUDE.FINAL., "[Yy]es")) %>%
+  rename(includeFinal = INCLUDE.FINAL.,
+         sherman1 = Sherman.1,
+         sherman2 = Sherman.2,
+         proAntitrustEnforcement = Pro.antitrust.enforcement) 
+
+#setwd("/Users/simabiondi/Desktop/Posner/antitrust/data")
+
+#antitrust_westlaw_sc_cases %>%
+#  write.csv(., file = "post51_sct_antitrust_cases_final.csv")
+```
+
+
+```{r clean SC judges Excel}
+
+sc_judge = sc_judge_read %>%
+  mutate(year_oath = format(`Date of Oath`, "%Y")) %>%
+  mutate(across(c(CC_endorse, WSJ_endorse),  na_if, "Unavailable")) %>%
+  mutate(era = case_when(year_oath > 1975 ~ "Low enforcement",
+                         T ~ "High enforcement")) %>%
+  mutate(across(.cols = ends_with("endorse"), .fns = ~ case_when(str_detect(., "y") ~ 1, 
+                                                                 T ~ 0))) %>%
+  mutate(name_edit = `Last Name, First Name`) %>%
+  mutate(last_name = str_extract(name_edit, "^[a-zA-Z]*")) %>%
+  mutate(row_num = 1:n()) %>%
+  mutate(initials = str_extract_all(name_edit, "[A-Z]")[row_num]) %>%
+  mutate(middle_initial = as.character(map(initials, 3))) %>%
+  mutate(first_initial = as.character(map(initials, 2))) %>%
+  mutate(across(middle_initial:first_initial, ~ replace(., . == "NULL", NA))) %>%
+  mutate(name_final = case_when(is.na(middle_initial) ~ paste(first_initial, last_name, sep = ""),
+                                T ~ paste(first_initial, middle_initial, last_name, sep = ""))) %>%
+  mutate(name_final = case_when(name_edit == "O'Connor, Sandra Day" ~ "SDOConnor",
+                                name_edit == "Harlan, John Marshall" ~ "JHarlan2",
+                                name_edit == "Hughes, Charles Evans" ~ "CEHughes2",
+                                T ~ name_final)) %>%
+  rename(justiceName = name_final) #%>%
+  # #merge updated business friendliness scores into data
+  # left_join(updated_bf_scores, by = "justiceName") %>%
+  # select(-ELP_business_litigant_perc) %>%
+  # mutate(ELP_business_litigant_perc = `fraction in favor of business`) %>%
+  # #merge updated NYT business friendliness scores into data
+  # left_join(select(updated_nyt_bf_scores, justiceName, total_bf_nyt_votes: bf_nyt_score), by = "justiceName") %>%
+  # select(-ELP_nyt_perc, ELP_nyt_case_count) %>%
+  # mutate(ELP_nyt_perc = bf_nyt_score,
+  #        ELP_nyt_case_count = total_bf_nyt_votes)
+
+```
+
+```{r clean judge vote data}
+justice_per_court_raw = justice_per_court_read %>%
+  select(term, justiceName, caseId) %>%
+  distinct(justiceName, term, .keep_all = T) %>%
+  filter(str_detect(caseId, "001")) %>%
+  pivot_wider(names_from = term, values_from = caseId) %>%
+  mutate(across(!justiceName, ~ case_when(!is.na(.) ~ 1, T ~ 0)))
+```
+
+```{r combine cleaned judge vote data with SC judge information }
+justice_per_court =  justice_per_court_raw %>%
+  left_join(sc_judge, keep = T) %>%
+  rename(justiceName = justiceName.y) %>%
+  select(!(`1946`:`1951`)) %>%
+  filter(justiceName != "WBRutledge" &  justiceName != "FMurphy" &
+           justiceName != "ACBarrett")
+
+  
+```
+
+## Calculations
+
+### Creating scores
+
+#### Judge level
+
+```{r BF and BF_NYT scores from Epstein data}
+justice_bf_scores  = bf_scores_read %>%
+  filter(term > 1951) %>%
+  filter(BusinessLitigant == "1. business is Petitioner OR respondent") %>%
+  group_by(justiceName, JVoteForBusiness) %>%
+  summarise(votes = n()) %>%
+  filter(!is.na(JVoteForBusiness)) %>%
+  pivot_wider(names_from = JVoteForBusiness, values_from = votes) %>%
+  mutate(total_votes = `j vote against business` + `j vote for business`,
+         score = round(`j vote for business`/(`j vote against business` + `j vote for business`), 3)) %>%
+  mutate(score_type = "bf") %>%
+  rename(`pro-enforcement` = `j vote against business`,
+         `anti-enforcement` = `j vote for business`) %>%
+  filter(justiceName %in% justice_per_court$justiceName) 
+
+justice_bf_nyt_scores = bf_scores_read %>%
+    filter(term > 1951) %>%
+  filter(BusinessLitigant == "1. business is Petitioner OR respondent" &
+           nytSalience == 1) %>%
+  group_by(justiceName, JVoteForBusiness) %>%
+  summarise(votes = n()) %>%
+  filter(!is.na(JVoteForBusiness)) %>%
+  pivot_wider(names_from = JVoteForBusiness, values_from = votes) %>%
+    replace(is.na(.), 0) %>%
+  mutate(total_votes = `j vote against business` + `j vote for business`,
+         score = round(`j vote for business`/(`j vote against business` + `j vote for business`), 3)) %>%
+  mutate(score_type = "bf_nyt") %>%
+  rename(`pro-enforcement` = `j vote against business`,
+         `anti-enforcement` = `j vote for business`) %>%
+  filter(justiceName %in% justice_per_court$justiceName) 
+
+```
+
+#### Court level
+
+##### Court level by justice
+```{r BF and BF_NYT score over time}
+
+court_bf_justice_score = justice_bf_scores %>%
+  left_join(select(justice_per_court, justiceName, `1952`:`2019`)) %>%
+  filter(!is.na(`1952`)) %>%
+  # filter(justiceName != "ACBarrett" & justiceName != "BMKavanaugh" &
+  #          justiceName != "FMurphy" & justiceName != "NMGorsuch" &
+  #          justiceName != "WBRutledge") %>%
+  mutate(across(`1952`:`2019`, ~ case_when(. == 0 ~ as.numeric(NA),
+                                           score_type == "bf" ~ .*score), .names = "{col}_bf")) %>%
+  select(ends_with("_bf")) %>%
+  ungroup() %>%
+  summarise(across(is.numeric, ~ round(mean(., na.rm = T), 3))) %>%
+  pivot_longer(everything()) %>%
+  mutate(court_term = as.numeric(str_extract(name, "\\d{4}"))) %>%
+  rename(bf_score = value) %>%
+  select(-name)
+
+  
+court_bf_nyt_justice_score = justice_bf_nyt_scores %>%
+  left_join(dplyr::select(justice_per_court, justiceName, `1952`:`2019`)) %>%
+  filter(!is.na(`1952`)) %>%
+  # filter(justiceName != "ACBarrett" & justiceName != "BMKavanaugh" &
+  #          justiceName != "FMurphy" & justiceName != "NMGorsuch" &
+  #          justiceName != "WBRutledge") %>%
+  mutate(across(`1952`:`2019`, ~ case_when(. == 0 ~ as.numeric(NA),
+                                           T ~ .*score), .names = "{col}_bf_nyt")) %>%
+  select(ends_with("_bf_nyt")) %>%
+  ungroup() %>%
+  summarise(across(where(is.numeric), ~ round(mean(., na.rm = T), 3))) %>%
+  pivot_longer(everything()) %>%
+  mutate(court_term = as.numeric(str_extract(name, "\\d{4}"))) %>%
+  rename(bf_nyt_score = value) %>%
+  select(-name)
+
+```
+
+##### Court level by cases
+
+```{r bf roll mean - case}
+court_bf_case_scores = bf_scores_read %>%
+  filter(BusinessLitigant == "1. business is Petitioner OR respondent" &
+           !is.na(JVoteForBusiness)) %>%
+  group_by(term, JVoteForBusiness) %>%
+  summarise(votes = n()) %>%
+  pivot_wider(names_from = JVoteForBusiness, values_from = votes) %>%
+  mutate(total_votes = `j vote against business` + `j vote for business`,
+         score = round(`j vote for business`/(`j vote against business` + `j vote for business`), 3)) %>%
+  mutate(score_type = "bf") %>%
+  rename(`pro-enforcement` = `j vote against business`,
+         `anti-enforcement` = `j vote for business`) 
+# court_bf_case_scores %>%
+#   left_join(court_bf_score, by = c("term" = "court_term")) %>%
+#   select(rolling_score, term, bf_score) %>%
+#   pivot_longer(!term, names_to = "scoreType", values_to = "score") %>%
+#   ggplot(aes(x = term, y = score, color = scoreType)) + geom_line() 
+```
+
+```{r roll mean bf_nyt - case}
+court_bf_nyt_case_scores = bf_scores_read %>%
+  filter(BusinessLitigant == "1. business is Petitioner OR respondent" &
+           nytSalience == 1) %>%
+  group_by(term, JVoteForBusiness) %>%
+  summarise(votes = n()) %>%
+  filter(!is.na(JVoteForBusiness)) %>%
+  pivot_wider(names_from = JVoteForBusiness, values_from = votes) %>%
+  replace(is.na(.), 0) %>%
+  mutate(total_votes = `j vote against business` + `j vote for business`,
+         score = round(`j vote for business`/(`j vote against business` + `j vote for business`), 3)) %>%
+  mutate(score_type = "bf_nyt") %>%
+  rename(`pro-enforcement` = `j vote against business`,
+         `anti-enforcement` = `j vote for business`) 
+
+# court_bf_nyt_justice_scores %>%
+#   left_join(court_bf_nyt_score, by = c("term" = "court_term")) %>%
+#   select(rolling_score, term, bf_nyt_score) %>%
+#   pivot_longer(!term, names_to = "scoreType", values_to = "score") %>%
+#   ggplot(aes(x = term, y = score, color = scoreType)) + geom_line() 
+```
+
+
+### Merging list of antitrust cases with justice votes cases
+
+#### Creating + clean dataset of antitrust cases
+```{r creating dataset with antitrust cases from SCT database}
+
+justice_votes_per_case = justice_per_court_read %>%
+  #merge list of antitrust cases with justice votes cases
+  mutate(sctCite = gsub("[S]. ", "S.", sctCite)) %>%
+  filter(usCite %in% filter(antitrust_westlaw_sc_cases, includeFinal == "Yes" 
+                            | includeFinal == "yes")$Citation
+           | sctCite %in% filter(antitrust_westlaw_sc_cases, includeFinal == "Yes" 
+                            | includeFinal == "yes")$Citation) %>%
+  mutate(Citation = ifelse(is.na(usCite), sctCite, usCite)) %>%
+  select(voteId, dateDecision, Citation, caseName, majOpinWriter, majVotes:majority) %>%
+  pivot_wider(names_from = justiceName, values_from = c(justice, vote:majority)) %>%
+  group_by(Citation) %>%
+  summarise(caseName = first(caseName), dateDecision = first(dateDecision), 
+            majOpinWriter = mean(majOpinWriter),
+            majVotes = mean(majVotes), minVotes = mean(minVotes),
+            across(starts_with("vote_"), ~ mean(.x, na.rm = T))) %>%
+  #add per curiam decision
+  add_row(Citation = "352 U.S. 992", 
+          caseName = "LAWLOR v. NATIONAL SCREEN SERVICE CORP.",
+          dateDecision = "2/25/1957",
+          majOpinWriter = NA,
+          majVotes = 5,
+          minVotes = 3,
+          vote_HLBlack = 1,
+          vote_SFReed = 1,
+          vote_FFrankfurter = 2,
+          vote_WODouglas = 1,
+          vote_HHBurton = 2,
+          vote_TCClark = 1,
+          vote_JHarlan2 = 2,
+          vote_WJBrennan = 1,
+          vote_EWarren = 1) %>%
+  # add handcoded court case characteristics
+  left_join(., select(filter(antitrust_westlaw_sc_cases, 
+                        Citation != "401 U.S. 1204"), Citation, includeFinal:sherman2),
+             by = c("Citation")) #%>%
+  # mutate(party1 = `party1...19`, party2 = `party2...20`, 
+  #        partyDecisionFavored = `partyDecisionFavored...23`)
+
+
+
+```
+
+
+
+```{r integrate and clean data}
+
+justice_votes = justice_votes_per_case %>%
+  mutate(year = as.integer(str_extract(dateDecision, "[0-9]{2}$"))) %>%
+  mutate(year = case_when(year < 51 & year > 9 ~ as.integer(paste0("20", year)),
+                          year < 51 & year < 10 ~ as.integer(paste0("200", year)),
+                          T ~ as.integer(paste0("19", year)))) %>%
+  mutate(party1_comp = case_when(str_detect(party1, "[Cc]ompan") ~ 1,
+                                T ~ 0)) %>%
+  mutate(party2_comp = case_when(str_detect(party2, "[Cc]ompan") ~ 1,
+                                T ~ 0)) %>%
+  mutate(party1_gov = case_when(str_detect(party1, "[Gg]ov") ~ 1,
+                                T ~ 0)) %>%
+  mutate(party2_gov = case_when(str_detect(party2, "[Gg]ov") ~ 1,
+                                T ~ 0)) %>%
+  mutate(party1_indiv = case_when(str_detect(party1, "[Ii]ndiv") ~ 1,
+                                T ~ 0)) %>%
+  mutate(party2_indiv = case_when(str_detect(party2, "[Ii]ndiv") ~ 1,
+                                T ~ 0)) %>%  
+  mutate(party1_comp_size_big = case_when(party1_comp == 1 & str_detect(party1, "^[Bb]ig") ~ T,
+                                          T ~ F)) %>%
+  mutate(party2_comp_size_big = case_when(party2_comp == 1 & str_detect(party2, "^[Bb]ig") ~ T,
+                                          T ~ F)) %>%
+  mutate(parties_comp = case_when(party1_comp == 1 & party2_comp == 1 ~ 1,
+                                  T ~ 0)) %>%
+  mutate(slash_or_comp_size_unclear = case_when(str_detect(party1, "/") | str_detect(party2, "/") ~ 1,
+                                                str_detect(party1, "Company") & str_detect(party2, "Company") ~ 1,
+                           T ~ 0)) %>%
+ # mutate(type_case_score = case_when(
+    #party1_comp & party2_gov |
+     #                                               party2_comp & party1_gov ~ 1,
+      #                               party1_indiv & party2_comp & slash_or_comp_size_unclear == 0 |
+       #                                     party2_indiv & party1_comp & slash_or_comp_size_unclear == 0 ~ 1,
+      #                                      parties_comp == 1 & slash_or_comp_size_unclear == 0~ 2,
+       #                              party1_gov | party2_gov ~ 3,
+
+        #                                          T ~ 0)) %>%
+  mutate(type_case_score = case_when(scoreType == "plb" ~ 2,
+                                     scoreType == "govCase" ~ 1,
+                                     T ~ 0)) %>%
+   mutate(across(starts_with("vote_"),
+                  ~ case_when(is.na(.) ~ "NA",
+                            . == 1 & proAntitrustEnforcement == "Yes" ~ "pro-enforcement",
+                            . == 1 & proAntitrustEnforcement == "No" ~ "anti-enforcement",
+  
+                            . == 2 & proAntitrustEnforcement == "Yes" ~ "anti-enforcement",
+                            . == 2 &  proAntitrustEnforcement == "No" ~ "pro-enforcement",
+  
+                            (. == 3 | . == 4) & proAntitrustEnforcement == "Yes" ~ "pro-enforcement",
+                            (. == 3 | . == 4) & proAntitrustEnforcement == "No" ~ "anti-enforcement",
+  
+                            (. == 6 | . == 7) & proAntitrustEnforcement == "Yes" ~ "anti-enforcement",
+                            (. == 6 | . == 7) & proAntitrustEnforcement == "No" ~ "pro-enforcement",
+                            #no 5s or 8s in dataset
+                             T ~ "NA"),
+                  .names = "dir_{.col}")) 
+
+
+
+```
+
+#### Calculating judge-level scores
+
+```{r generate monopoly judge scores}
+
+
+justice_monopoly_scores_raw = justice_votes %>% 
+  select(starts_with("dir_vote_"), type_case_score) %>%
+  pivot_longer(!type_case_score, names_to = "justice", values_to = "vote_direction") %>%
+  filter(!is.na(vote_direction) & vote_direction != "NA") %>%
+  group_by(justice, vote_direction, type_case_score) %>%
+  summarise(count = n()) %>%
+  #filter(type_case_score != 0) %>%
+  pivot_wider(names_from = vote_direction, values_from = count) %>%
+  mutate(across(`pro-enforcement`:`anti-enforcement`, ~ replace_na(., 0))) 
+
+
+justice_monopoly_scores_anti_enforcement = justice_monopoly_scores_raw %>%
+  summarise(justice = first(justice), type_case_score = 3, 
+          `pro-enforcement` = sum(`pro-enforcement`),
+          `anti-enforcement` = sum(`anti-enforcement`))
+
+justice_monopoly_score = justice_monopoly_scores_raw %>%
+  bind_rows(justice_monopoly_scores_anti_enforcement) %>%
+  mutate(score = `pro-enforcement`/(`pro-enforcement`+ `anti-enforcement`)) %>%
+  # filter(justice != "dir_vote_ACBarrett",
+  #        justice != "dir_vote_BMKavanaugh",
+  #        justice != "dir_vote_NMGorsuch") %>%
+  filter(type_case_score != 0) %>%
+  mutate(type_case_score = recode(type_case_score, 
+                                  '1' = "gov_score", 
+                                  '2' = "psb_score", 
+                                  '3' = "pe_score")) %>%
+ # pivot_wider(names_from = type_case_score, values_from = score) %>%
+  ungroup() %>%
+  mutate(justice = str_extract(justice, "[A-Z]+[a-z]+[0-9]*")) %>%
+  rename(justiceName = justice)
+```
+
+
+
+#### Court level - by justice
+```{r calc court scores by justice}
+
+court_monopoly_justice_score = justice_monopoly_score %>% 
+  left_join(select(justice_per_court, justiceName, `1952`:`2019`)) %>%
+  mutate(across(`1952`:`2019`, ~ case_when(. == 0 ~ as.numeric(NA),
+                                             T ~ .x*score), .names = "{col}_score")) %>%
+  select(justiceName, type_case_score, ends_with("score")) %>%
+  filter(justiceName != "ACBarrett") %>%
+  select(-score, -justiceName) %>%
+  group_by(type_case_score) %>%
+  summarise(across(is.numeric, ~ mean(., na.rm = T))) %>%
+  pivot_longer(!type_case_score) %>%
+  pivot_wider(names_from = type_case_score, values_from = value) %>%
+  mutate(name = as.integer(str_extract(name, "[0-9]{4}"))) %>%
+  rename(court_term = name)
+```
+
+#### Court level - by justice (without Gorsuch and Kavanaugh)
+```{r calc court scores by justice without NM and BK}
+
+court_monopoly_justice_score_ends2016 = justice_monopoly_score %>% 
+  left_join(select(justice_per_court, justiceName, `1952`:`2019`)) %>%
+  mutate(across(`1952`:`2019`, ~ case_when(. == 0 ~ as.numeric(NA),
+                                             T ~ .x*score), .names = "{col}_score")) %>%
+  select(justiceName, type_case_score, ends_with("score")) %>%
+  filter(justiceName != "ACBarrett" & justiceName != "BMKavanaugh" &
+           justiceName != "NMGorsuch") %>%
+  select(-score, -justiceName) %>%
+  group_by(type_case_score) %>%
+  summarise(across(is.numeric, ~ mean(., na.rm = T))) %>%
+  pivot_longer(!type_case_score) %>%
+  pivot_wider(names_from = type_case_score, values_from = value) %>%
+  mutate(name = as.integer(str_extract(name, "[0-9]{4}"))) %>%
+  rename(court_term = name)
+```
+
+
+#### Court level - by case
+```{r calc court scores by case}
+
+court_monopoly_scores_case_raw = justice_votes %>% 
+  select(starts_with("dir_vote_"), type_case_score, year) %>%
+  pivot_longer(!c(type_case_score, year), names_to = "justice", values_to = "vote_direction") %>%
+  filter(!is.na(vote_direction) & vote_direction != "NA") %>%
+  group_by(year, vote_direction, type_case_score) %>%
+  summarise(count = n()) %>%
+  pivot_wider(names_from = vote_direction, values_from = count) %>%
+  mutate(across(`pro-enforcement`:`anti-enforcement`, ~ replace_na(., 0))) 
+
+court_monopoly_scores_case_anti_enforcement = court_monopoly_scores_case_raw %>%
+  summarise(year = first(year), type_case_score = 3, 
+          `pro-enforcement` = sum(`pro-enforcement`),
+          `anti-enforcement` = sum(`anti-enforcement`))
+
+court_monopoly_case_score = court_monopoly_scores_case_raw %>%
+  bind_rows(court_monopoly_scores_case_anti_enforcement) %>%
+  mutate(score = `pro-enforcement`/(`pro-enforcement`+ `anti-enforcement`)) %>%
+  filter(type_case_score != 0) %>%
+  mutate(type_case_score = recode(type_case_score, 
+                                  '1' = "gov_score", 
+                                  '2' = "psb_score", 
+                                  '3' = "pe_score")) 
+
+```
+### Combing all scores into 1 df
+
+#### Names and term dates of SCT justices
+```{r}
+page = read_html("http://scdb.wustl.edu/documentation.php?var=majOpinWriter")
+
+html_tbls = page %>%
+  html_elements("table") %>%
+  html_table()
+
+justice_numbers_tbl = html_tbls[[6]] %>%
+  rename(justiceNumber = X1, justiceName = X2, justiceDates = X3) 
+
+justice_term_dates = justice_numbers_tbl %>%
+  rowwise() %>%
+  mutate(serviceStarts = str_extract_all(justiceDates, "[0-9]{4}")[[1]][[1]],
+         serviceEnds = ifelse(str_detect(justiceDates, "0000"), 
+                              " ",
+                              str_extract_all(justiceDates, "[0-9]{4}")[[1]][2])) %>%
+  mutate(serviceEnds = ifelse(str_detect(serviceStarts, "19[0-9]{2}") 
+                              & str_detect(serviceEnds, "20[0-9]{2}"), 
+                              serviceEnds, 
+                              substr(serviceEnds, 3, nchar(serviceEnds))))
+
+```
+
+#### Judge level
+```{r ALL scores justice-level}
+
+justice_scores = justice_monopoly_score %>%
+  rename(score_type = type_case_score) %>%
+  bind_rows(justice_bf_scores, justice_bf_nyt_scores) %>%
+  left_join(select(sc_judge, Party, era, justiceName, year_oath)) %>%
+  mutate(total_votes = `pro-enforcement` + `anti-enforcement`) %>%
+  filter(justiceName != "WBRutledge" &  justiceName != "FMurphy" & justiceName != "ACBarrett") %>%
+  mutate(justiceLastName = case_when(justiceName == "SDOConnor" ~ "O'Connor",
+                                     T ~ str_extract(justiceName, "[A-Z][a-z]+"))) %>%
+  left_join(justice_term_dates) %>%
+  
+  mutate(justiceTitle = ifelse(nchar(serviceEnds) < 3 & nchar(serviceEnds) > 1,
+           paste0(justiceLastName, " (", serviceStarts, "-'", serviceEnds, ")"),
+           paste0(justiceLastName, " (", serviceStarts, "-", serviceEnds, ")")))
+
+```
+#### Court level - justice
+```{r ALL score court level by justice}
+chiefJusticeLevels = c("Vinson", "Warren", "Burger", "Rehnquist", "Roberts")
+
+court_justice_scores = court_monopoly_justice_score %>%
+  left_join(court_bf_justice_score) %>%
+  left_join(court_bf_nyt_justice_score) %>%
+  ungroup() %>%
+  pivot_longer(!court_term, names_to = "type_case_score", values_to = "score") %>%
+  group_by(type_case_score) %>%
+  mutate(rolling_score = rollmean(score, 3, align = "center", fill = 0)) %>%
+  mutate(chief_term = (case_when(court_term < 1954 ~ "Vinson",
+                                court_term > 1953 & court_term < 1969 ~ "Warren",
+                                court_term > 1968 & court_term < 1986 ~ "Burger",
+                                court_term > 1985 & court_term < 2005 ~ "Rehnquist",
+                                court_term > 2004 ~ "Roberts"))) %>%
+  mutate(chief_term = factor(chief_term, levels = chiefJusticeLevels))
+```
+
+#### Court level - cases
+```{r ALL score court level by case}
+ 
+court_monopoly_case_score_temp = court_monopoly_case_score %>%
+  select(year, type_case_score, score) %>%
+  pivot_wider(names_from = type_case_score, values_from = score) %>%
+  full_join(., as.data.frame(1952:2021), by = c("year" = "1952:2021")) %>%
+  left_join(rename(select(court_bf_case_scores, term, score), bf_score = score), by = c("year" = "term")) %>%
+  full_join(., as.data.frame(1952:2021), by = c("year" = "1952:2021")) %>%
+  left_join(rename(select(court_bf_nyt_case_scores, term, score), bf_nyt_score = score), by = c("year" = "term")) %>%
+  ungroup() %>%
+  pivot_longer(!year, names_to = "type_case_score", values_to = "score") %>%
+  group_by(type_case_score) %>%
+  mutate(rolling_score = rollapply(score, 3, mean, align = "right", fill = NA)) %>%
+  mutate(decade = as.integer(paste0(str_extract(year, "[0-9]{3}"), "0"))) 
+
+court_case_scores = court_monopoly_case_score_temp %>%
+  left_join(summarise(group_by(court_monopoly_case_score_temp, decade, type_case_score),
+            decadeScore = mean(score, na.rm = T))) %>%
+  rename(court_term = year) %>%
+  mutate(chief_term = (case_when(court_term < 1954 ~ "Vinson",
+                                court_term > 1953 & court_term < 1969 ~ "Warren",
+                                court_term > 1968 & court_term < 1986 ~ "Burger",
+                                court_term > 1985 & court_term < 2005 ~ "Rehnquist",
+                                court_term > 2004 ~ "Roberts")))
+
+```
+
+
+
+
+
+### Avg ae and plb of top 5 by year
+
+```{r average AE score of top 5 per year (without NM and BK)}
+court_ae_score_top5_woutGorKav = justice_monopoly_score %>%
+  filter(type_case_score == "pe_score") %>%
+  mutate(score = 1 - score) %>% #turn PE score to AE score
+  filter(justiceName != "ACBarrett" & justiceName != "BMKavanaugh" &
+           justiceName != "NMGorsuch") %>%
+  left_join(select(justice_per_court, justiceName, `1952`:`2019`)) %>%
+  mutate(across(`1952`:`2019`, ~ case_when(. == 0 ~ as.numeric(NA),
+                                             T ~ .x*score), .names = "{col}_ae")) %>%
+  select(`1952_ae`:`2019_ae`, justiceName) %>%
+  mutate(across(is.numeric, ~ min_rank(desc(.x)), .names = "{col}_top")) %>%
+  pivot_longer(!justiceName, names_to = "metric", values_to = "value") %>%
+  mutate(term = as.integer(str_extract(metric, "[0-9]{4}")),
+         type = str_extract(metric, "[a-z]{2}_?[a-z]?")) %>%
+  select(-metric) %>%
+  filter(!is.na(value)) %>%
+  pivot_wider(names_from = type, values_from = value) %>%
+  filter(ae_t < 6) %>%
+  group_by(term) %>%
+  summarise(mean = mean(ae, na.rm = T)) 
+```
+
+```{r average AE score of top 5 per year (ends in 2015)}
+court_ae_score_top5_ends2015 = justice_monopoly_score %>%
+  filter(type_case_score == "pe_score") %>%
+  mutate(score = 1 - score) %>% #turn PE score to AE score
+  left_join(select(justice_per_court, justiceName, `1952`:`2015`)) %>%
+  mutate(across(`1952`:`2015`, ~ case_when(. == 0 ~ as.numeric(NA),
+                                             T ~ .x*score), .names = "{col}_ae")) %>%
+  select(`1952_ae`:`2015_ae`, justiceName) %>%
+  mutate(across(is.numeric, ~ min_rank(desc(.x)), .names = "{col}_top")) %>%
+  pivot_longer(!justiceName, names_to = "metric", values_to = "value") %>%
+  mutate(term = as.integer(str_extract(metric, "[0-9]{4}")),
+         type = str_extract(metric, "[a-z]{2}_?[a-z]?")) %>%
+  select(-metric) %>%
+  filter(!is.na(value)) %>%
+  pivot_wider(names_from = type, values_from = value) %>%
+  filter(ae_t < 6) %>%
+  group_by(term) %>%
+  summarise(mean = mean(ae, na.rm = T)) 
+```
+
+
+```{r average PLB of top 5 by year (without NM and BK)}
+court_plb_score_top5_woutNMBK = justice_monopoly_score %>%
+  filter(type_case_score == "psb_score") %>%
+  mutate(score = 1 - score) %>%
+   filter(justiceName != "ACBarrett" & justiceName != "BMKavanaugh" &
+           justiceName != "NMGorsuch") %>%
+  left_join(select(justice_per_court, justiceName, `1952`:`2019`)) %>%
+  mutate(across(`1952`:`2019`, ~ case_when(. == 0 ~ as.numeric(NA),
+                                             T ~ .x*score), .names = "{col}_plb")) %>%
+  select(`1952_plb`:`2019_plb`, justiceName) %>%
+  mutate(across(is.numeric, ~ min_rank(desc(.x)), .names = "{col}_top")) %>%
+  pivot_longer(!justiceName, names_to = "metric", values_to = "value")  %>%
+  mutate(term = as.integer(str_extract(metric, "[0-9]{4}")),
+         type = str_extract(metric, "[a-z]{3}_?[a-z]?")) %>%
+  select(-metric) %>%
+  filter(!is.na(value)) %>%
+  pivot_wider(names_from = type, values_from = value) %>%
+  filter(plb_t < 6) %>%
+  group_by(term) %>%
+  summarise(mean = mean(plb, na.rm = T)) 
+
+```
+
+```{r average PLB of top 5 by year (ends in 2015)}
+court_plb_score_top5_ends2015 = justice_monopoly_score %>%
+  filter(type_case_score == "psb_score") %>%
+  mutate(score = 1 - score) %>%
+  left_join(select(justice_per_court, justiceName, `1952`:`2015`)) %>%
+  mutate(across(`1952`:`2015`, ~ case_when(. == 0 ~ as.numeric(NA),
+                                             T ~ .x*score), .names = "{col}_plb")) %>%
+  select(`1952_plb`:`2015_plb`, justiceName) %>%
+  mutate(across(is.numeric, ~ min_rank(desc(.x)), .names = "{col}_top")) %>%
+  pivot_longer(!justiceName, names_to = "metric", values_to = "value")  %>%
+  mutate(term = as.integer(str_extract(metric, "[0-9]{4}")),
+         type = str_extract(metric, "[a-z]{3}_?[a-z]?")) %>%
+  select(-metric) %>%
+  filter(!is.na(value)) %>%
+  pivot_wider(names_from = type, values_from = value) %>%
+  filter(plb_t < 6) %>%
+  group_by(term) %>%
+  summarise(mean = mean(plb, na.rm = T)) 
+
+```
+
+
+## Court scores over time
+```{r 3(1) bf score over time}
+
+court_justice_scores %>%
+  filter(type_case_score == "bf_score") %>%
+  ggplot() +
+  geom_point(aes(x = court_term, y = score, shape = chief_term)) +
+  labs(x = "Court Term", y = "Business-friendliness score (by justice)", 
+       title = "Business-friendliness score of SCT by Chief Era ",
+       shape = "Chief Era",
+              caption = "Data from Epstein, Landes, and Posner (2013)") +
+  geom_label(aes(x = 1969+5, y = filter(court_justice_scores, court_term == 1969 & type_case_score == "bf_score")$score - 0.01, label = "Burger joins"), size = 3, fill = "grey90") +
+    geom_label(aes(x = 1969+5, y = filter(court_justice_scores, court_term == 1969 & type_case_score == "bf_score")$score - 0.03, 
+                   label = "Warren & Fortas leave"), 
+               size = 3, fill = "grey90") +
+  theme_classic()
+
+ggsave(path= fig.path, "bf_score_by_sct_chief_era.png")
+  
+```
+
+
+
+
+## Compare justice scores
+```{r 8(2) justice scores (pe and psb) comparison by party}
+justice_scores %>%
+  left_join(select(justice_per_court, c(justiceName, Party, era, year_oath))) %>%
+  filter(score_type == "pe_score" | score_type == "psb_score") %>%
+  filter(!(justiceName %in% c("BMKavanaugh", "NMGorsuch"))) %>%
+  select(justiceName, score_type, score, era, Party, justiceLastName, year_oath, justiceTitle) %>%
+  mutate(score_type = ifelse(score_type == "psb_score", "plb_score", "ae_score"),
+         score = 1 - score) %>%
+  pivot_wider(names_from = score_type, values_from = score) %>%
+  mutate(year_oath = as.integer(year_oath)) %>%
+  group_by(Party) %>%
+  arrange(Party, year_oath, justiceTitle) %>%
+  mutate(order = row_number()) %>%
+  pivot_longer(ae_score:plb_score) %>% 
+  mutate(name = recode(name, "ae_score" = "Anti-enforcement",
+                       "plb_score" = "Pro-large business")) %>%
+  mutate(Party = recode(Party, 'D' = 'Democrat', 'R' = 'Republican')) %>%
+  mutate(justiceTitle = fct_reorder(justiceTitle, order, .desc = T)) %>%
+  ggplot() + 
+ # geom_line(aes(x = value, y =  justiceTitle)) +
+  geom_point(aes(x = value, y = justiceTitle, shape = name)) +
+  labs(x = "Score", y = "Justice", 
+      shape = "Score",
+       title = "Pro-large business and anti-enforcement\n friendliness by Justice") + theme_minimal() +
+  facet_wrap(vars(Party), scales = "free_y") +   
+  theme(legend.position="bottom", legend.box="vertical", legend.margin=margin(),
+        axis.title.x = element_blank(), axis.title.y = element_blank()) +
+  
+ ggsave(path = fig.path, "sct_justice_monopoly_score_ae_plb_faceted_party.png")
+  
+           
+```
+
+```{r 10(1) justice scores (gov and bf) comparison by party}
+justice_scores %>%
+  filter(score_type == "gov_score" | score_type == "bf") %>%
+  filter(!(justiceName %in% c("BMKavanaugh", "NMGorsuch"))) %>%
+  select(justiceName, justiceTitle, score_type, score, Party, era, year_oath) %>%
+  mutate(score_type = ifelse(score_type == "gov_score", "ag_score", "bf_score"),
+         score = ifelse(score_type == "bf_score", score, 1 - score)) %>%
+  pivot_wider(names_from = score_type, values_from = score) %>%
+  mutate(year_oath = as.integer(year_oath)) %>%
+  group_by(Party) %>%
+  arrange(Party, year_oath, justiceName) %>%
+  mutate(order = row_number()) %>%
+  pivot_longer(ag_score: bf_score) %>%
+  mutate(name = recode(name, "ag_score" = "Anti-government", 
+                       "bf_score" = "Business-friendliness")) %>%
+  mutate(Party = recode(Party, 'D' = 'Democrat', 'R' = 'Republican')) %>%
+  mutate(justiceTitle = fct_reorder(justiceTitle, order, .desc = T)) %>%
+  ggplot() + 
+  #geom_line(aes(x = value, y = justiceTitle)) +
+  geom_point(aes(x = value, y = justiceTitle, shape = name)) +
+    labs(x = "Score", y = "Justice", shape = "Score",
+         title = "Business-friendliness and anti-government\n scores by Justice",
+                caption = "Business-friendliness data from Epstein, Landes, and Posner (2013)") +
+  theme_minimal() +
+  facet_wrap(vars(Party), scales = "free_y") + 
+  theme(legend.position="bottom", legend.box="vertical", legend.margin=margin(),  
+        axis.title.x = element_blank(), axis.title.y = element_blank())
+
+
+ggsave(path = fig.path, "sct_justice_monopoly_score_gov_bf_faceted_party.png")
+```
+
+
+```{r NEW justice scores (all) comparison by party}
+justice_scores %>%
+  filter(score_type != "bf_nyt") %>%
+  filter(!(justiceName %in% c("BMKavanaugh", "NMGorsuch"))) %>%
+  select(justiceName, justiceTitle, score_type, score, Party, era, year_oath) %>%
+  mutate(score_type = case_when(score_type == "psb_score" ~ "plb_score",
+                                score_type == "pe_score" ~ "ae_score",
+                                score_type == "gov_score" ~ "ag_score",
+                                T ~ "bf_score")) %>%
+  mutate(score = ifelse(score_type == "bf_score", score, 1 - score)) %>%
+  pivot_wider(names_from = score_type, values_from = score) %>%
+  mutate(year_oath = as.integer(year_oath)) %>%
+  group_by(Party) %>%
+  arrange(Party, year_oath, justiceTitle) %>%
+  mutate(order = row_number()) %>%
+  pivot_longer(ag_score: bf_score) %>%
+  mutate(name = recode(name, "ag_score" = "Anti-government", 
+                       "bf_score" = "Business-friendliness",
+                       "ae_score" = "Anti-enforcement",
+                       "plb_score" = "Pro-large business")) %>%
+  mutate(Party = recode(Party, 'D' = 'Democrat', 'R' = 'Republican')) %>%
+  mutate(justiceTitle = fct_reorder(justiceTitle, order, .desc = T)) %>%
+  ggplot() + 
+  geom_point(aes(x = value, y = justiceTitle, shape = name)) +
+    labs(x = "Score", y = "Justice", shape = "Score",
+         title = "All scores by Justice", 
+         caption = "Business-friendliness data from Epstein, Landes, and Posner (2013)")+ 
+  theme_minimal() +
+  facet_wrap(vars(Party), scales = "free_y") + 
+  theme(legend.position="bottom", legend.box="vertical", 
+        axis.title.x = element_blank(), axis.title.y = element_blank()) + 
+  guides(shape=guide_legend(ncol=2))
+
+
+ggsave(path = fig.path, "sct_justice_monopoly_score_all_faceted_party.png")
+```
+
+## Comparing court scores over time
+
+```{r 12(1) pe/psb/pg over time figures (by year justice) - Kavanaugh and Gorsuch removed}
+
+#court_justice_scores %>%
+  
+court_monopoly_justice_score_ends2016 %>%
+  pivot_longer(!court_term, names_to = "type_case_score", values_to = "score") %>%
+  filter(type_case_score == "pe_score" |  
+           type_case_score == "psb_score" |  
+           type_case_score == "gov_score") %>%
+  mutate(type_case_score = recode(type_case_score, "pe_score" = "Pro-enforcement score",
+                              "psb_score" = "Pro-small company score",
+                              "gov_score" = "Pro-goverment score")) %>%
+  ggplot() + 
+  geom_line(aes(x = court_term, y = score, color = type_case_score)) +
+ #     scale_color_grey(start = 0.25, end = 0.75) + 
+  theme_classic() +
+      scale_color_grey(start = 0, end = 0.8) + 
+  labs(x = "Court Term", y = "Moving average score",
+       title = "Moving average measures of the Court's pro-enforcement,\npro-government, and pro-small company bias over\ntime (by justice profile)",
+       color = "Case sample") +   theme(legend.position="bottom", legend.box="vertical", legend.margin=margin()) 
+
+```
+```{r 12(1) pe/psb/pg over time figures (by year justice) - excludes 2016}
+
+court_justice_scores %>%
+  filter(court_term < 2016) %>%
+  filter(type_case_score == "pe_score" |  
+           type_case_score == "psb_score" |  
+           type_case_score == "gov_score") %>%
+  mutate(type_case_score = recode(type_case_score, "pe_score" = "Pro-enforcement score",
+                              "psb_score" = "Pro-small company score",
+                              "gov_score" = "Pro-goverment score")) %>%
+  ggplot() + 
+  geom_line(aes(x = court_term, y = score, color = type_case_score)) +
+ #     scale_color_grey(start = 0.25, end = 0.75) + 
+  theme_classic() +
+    scale_color_grey(start = 0, end = 0.8) + 
+  labs(x = "Court Term", y = "Moving average score",
+       title = "Moving average measures of the Court's pro-enforcement, pro-government,\n and pro-small company bias over time (by justice profile)",
+       color = "Case sample") +   theme(legend.position="bottom", legend.box="vertical", legend.margin=margin()) 
+
+```
+
+
+```{r 15(1) average of top 5 graphs (w/out NM and BK)}
+
+
+court_ae_score_top5_woutGorKav %>%
+  left_join(court_plb_score_top5_woutNMBK, by = "term", suffix = c("_ae", "_plc")) %>%
+  pivot_longer(!term, names_to = "mean_type", values_to = "mean") %>%
+  mutate(mean_type = case_when(mean_type == "mean_ae" ~ "Anti-enforcement",
+                               T ~ "Pro-large company bias")) %>%
+  ggplot(aes(x = term, y = mean, color = mean_type)) + 
+  #geom_point() + 
+  geom_line() +
+  scale_color_grey(start = 0.1, end = 0.5) + 
+  theme_classic() +
+  labs(x = "Court Term", y = "Mean", 
+       title = "Moving average of the top five anti-enforcement and pro-large\n company bias scores over SCT terms",
+       color = "Score") 
+
+```
+
+
+```{r 15(1) average of top 5 graphs (ends after 2015)}
+
+
+court_ae_score_top5_ends2015 %>%
+  left_join(court_plb_score_top5_ends2015, by = "term", suffix = c("_ae", "_plc")) %>%
+  pivot_longer(!term, names_to = "mean_type", values_to = "mean") %>%
+  mutate(mean_type = case_when(mean_type == "mean_ae" ~ "Anti-enforcement",
+                               T ~ "Pro-large company bias")) %>%
+  ggplot(aes(x = term, y = mean, color = mean_type)) + 
+  #geom_point() + 
+  geom_line() +
+  scale_color_grey(start = 0.1, end = 0.5) + 
+  theme_classic() +
+  labs(x = "Court Term", y = "Mean", 
+       title = "Moving average of top five anti-enforcement and pro-large\n company bias scores over SCT terms",
+       color = "Score") 
+
+```
+
+
+## Expanding to diminishing enforcement ratio (win-loss) graphs
+```{r 19(1) antitrust enforcement all cases}
+
+#bar chart
+antitrust_westlaw_sc_cases %>%
+  select(year, proAntitrustEnforcement) %>%
+  mutate(proAntitrustEnforcement_f = forcats::fct_rev(proAntitrustEnforcement)) %>%
+  ggplot() + 
+  geom_bar(aes(x = year, fill = proAntitrustEnforcement_f), position = "stack") + 
+  scale_fill_manual(values = c("Yes" = "green4", "No" = "red")) + 
+  theme_classic() + theme(legend.position = "bottom") +
+  labs(title = "Expanding to diminishing enforcement ratio of Supreme Court antitrust cases", 
+       x = "Court Term",
+       y = "Count",
+       fill = "Expands enforcement?") +
+    scale_y_continuous(breaks= breaks_pretty()) 
+
+```
+
+### Pro-enforcement score of majority opinion authors
+```{r 14(1) pe of majOpinWriter}
+
+justice_votes %>%
+  select(majOpinWriter, year) %>%
+  filter(!is.na(majOpinWriter)) %>%
+  inner_join(justice_numbers_tbl, by = c("majOpinWriter" = "justiceNumber")) %>%
+  left_join(filter(justice_scores, score_type == "pe_score"), by = "justiceName") %>%
+  filter(!is.na(score_type)) %>% #Kavanaugh and Gorsuch don't have bf or psb score
+  group_by(year) %>%
+  summarise(year = mean(year), score = mean(score, na.rm = T)) %>%
+  filter(year < 2019) %>%
+  ggplot(aes(x = year, y = score)) + 
+  geom_smooth(color = "black", method = "lm") + 
+  geom_point() + 
+  labs(x = "Court Term", y = "Mean",
+           title = "Mean pro-enforcement scores of SCT opinion authors over time") +
+  theme_classic()
+
+```
+
+
+

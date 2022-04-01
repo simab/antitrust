@@ -6,26 +6,32 @@ output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(echo = FALSE, 
+                      warning = F, message = F)
 options(warn = -1)
 library(ggplot2)
 library(dplyr)
 library(tidyr)
 library(finalfit)
 library(readxl)
+library(writexl)
 library(forcats)
 library(stringr)
-fig.path = here::here("figs")
+library(kableExtra)
+library(lemon)
+fig.path = here::here("figs/final draft")
 
 ```
 
-# Read data
+## Read data
 ```{r}
 df = read.csv("data/Old versions of data/Part_2_v1.csv")
 
 ```
 
 ## Create datasets of previous positions: remove unnecessary vars, split into 2 separate dfs 
+
+## Calculate previous positions
 ```{r}
 df_alt_pre76_prev = data.frame(Type_of_prev_position = "Alternate", n = 4)
 df_pre76_previous = df %>%
@@ -83,36 +89,45 @@ future_position_df$time_period = factor(future_position_df$time_period,
 ## Summarizing revolving door
 ```{r}
 
-df_summary = df %>%
+df_summary_long = df %>%
   mutate(era = case_when(Year_started < 1976 ~ "Pre-1976",
                          T ~ "Post-1975")) %>%
   select(Type_of_prev_position, Type_of_following_position, era) %>%
   
   mutate(sum_type_prev_pos = case_when(Type_of_prev_position == "Industry" | 
-                                         Type_of_prev_position == "Law firm" ~ "Law firm/\nindustry",
+                                         Type_of_prev_position == "Law firm" ~ "Law firm &\nindustry",
                                        Type_of_prev_position == "Government" | 
                                          Type_of_prev_position == "Alternate" |
-                                         Type_of_prev_position == "Academia" ~ "Government/\nacademia",
+                                         Type_of_prev_position == "Academia" ~ "Government &\nacademia",
                                        T ~ "Other")) %>%
   mutate(sum_type_follow_pos = case_when(Type_of_following_position == "Industry" | 
-                                           Type_of_following_position == "Law firm" ~ "Law firm/\nindustry",
+                                           Type_of_following_position == "Law firm" ~ "Law firm &\nindustry",
                                          Type_of_following_position == "Government" | 
                                            Type_of_following_position == "Alternate" |
-                                           Type_of_following_position == "Academia" ~ "Government/\nacademia",
+                                           Type_of_following_position == "Academia" ~ "Government &\nacademia",
                                          T ~ "Other")) %>%
   pivot_longer(cols = !era, values_to = "Type of positions") %>%
   filter(name != "Type_of_prev_position" & name != "Type_of_following_position") %>%
   mutate(direction = case_when(str_detect(name, "prev") ~ "Previous position",
                                T ~ "Following position")) %>%
+  mutate(direction_f = factor(direction, levels = c('Previous position', 'Following position')),
+         Era = factor(era, levels = c('Pre-1976', 'Post-1975'))) 
   
+
+```
+
+```{r}
+
+df_summary = df_summary_long %>%
   group_by(era, name, `Type of positions`, direction) %>%
   summarise(count = n()) %>%
   ungroup() %>%
   group_by(era, direction) %>%
   mutate(freq = (count/sum(count))* 100) %>%
+  mutate(direction = case_when(str_detect(name, "prev") ~ "Previous position",
+                               T ~ "Following position")) %>%
   mutate(direction_f = factor(direction, levels = c('Previous position', 'Following position')),
          Era = factor(era, levels = c('Pre-1976', 'Post-1975'))) 
-  df_summary
 
 ```
 
@@ -147,43 +162,72 @@ p_future_positions = future_position_df %>%
 
 
 p_summary_graph = df_summary %>%
-  ggplot(aes(x = `Type of positions`, y = freq, fill = Era)) + 
-    geom_bar(stat = "identity", position = position_dodge2()) +
-  facet_wrap(vars(direction_f)) +
+  filter(`Type of positions` != "Other") %>%
+  ggplot(aes(x = `Type of positions`)) + 
+  geom_col(aes(y = freq, fill = Era),
+           position = position_dodge2()) +
+  facet_wrap(vars(direction_f), scales = "free", dir = "v") +
+    labs(title = "Composition of officials' career trajectories", y = "% of officials employed") +
+  scale_fill_grey() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position = "bottom",
+        panel.background = element_rect(fill = "white")) 
+
+
+
+p_summary_graph_labels = df_summary %>%
+  filter(`Type of positions` != "Other") %>%
+  ggplot(aes(x = Era, y = freq, fill = Era)) + 
+  geom_col(position = position_dodge2()) + 
+  facet_grid(vars(direction_f),  vars(`Type of positions`), 
+            scales = "free_x"
+            ) +
   labs(title = "Composition of officials' career trajectories", y = "% of officials employed") +
-  theme_bw() + scale_fill_grey()
-
-
-
+  scale_fill_grey() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks.x = element_blank(), 
+        axis.text.x=element_blank(), 
+        axis.title.x = element_blank(),
+        legend.position = "bottom",
+        panel.background = element_rect(fill = "white")) 
 
 ```
+
+
+
 
 ```{r}
 
 p_previous_positions
-ggsave(path = fig.path, "previous_position_fig.png")
+#ggsave(path = fig.path, "previous_position_fig.png")
 
 p_future_positions
-ggsave(path = fig.path, "future_position_fig.png")
+#ggsave(path = fig.path, "future_position_fig.png")
 
 p_summary_graph
 ggsave(path = fig.path, "summary_position_fig.png")
 
+
+p_summary_graph_labels
+ggsave(path = fig.path, "summary_position_grid_fig.png")
+
 ```
 
 ```{r}
-df_summary %>%
-  filter(direction == "Previous position")
-
-prev_position_df %>%
-  mutate(adding = case_when(Type_of_prev_position == "Academia" ~ 1,
-                            Type_of_prev_position == "Government" ~ 1,
-                            Type_of_prev_position == "Law firm" ~ 2,
-                            Type_of_prev_position == "Industry" ~ 2,
-                            T ~ 3)) %>%
-  group_by(time_period, adding) %>%
-  summarise(n = sum(n), Type_of_prev_position = first(Type_of_prev_position), percent = mean(percent)) %>%
-  select(-adding)
+# df_summary %>%
+#   filter(direction == "Previous position")
+# 
+# prev_position_df %>%
+#   mutate(adding = case_when(Type_of_prev_position == "Academia" ~ 1,
+#                             Type_of_prev_position == "Government" ~ 1,
+#                             Type_of_prev_position == "Law firm" ~ 2,
+#                             Type_of_prev_position == "Industry" ~ 2,
+#                             T ~ 3)) %>%
+#   group_by(time_period, adding) %>%
+#   summarise(n = sum(n), Type_of_prev_position = first(Type_of_prev_position), percent = mean(percent)) %>%
+#   select(-adding)
 ```
 
 ```{r party affiliation}
@@ -202,7 +246,8 @@ df_party_affil %>%
 
                                  T ~ "no match")) %>%
   group_by(partyMatchString) %>%
-  count()
+  count() %>%
+  kable()
 
 
 df_party_affil %>%
@@ -225,8 +270,429 @@ df_party_affil %>%
   labs(x = "Year", y = "Count of officials", fill = "Party of nominating president",
        title = "Party of nominating president for antitrust AAGs and FTC Commissioners")
  
-df_party_affil %>%
-  filter(presidentParty == "acting") 
+# df_party_affil %>%
+#   filter(presidentParty == "acting") 
+
+
+
+```
+
+## Merging nomination data with personnel Excel
+```{r}
+nomination_df = read_excel("data/Summary of Nominations - completed.xlsx") %>%
+  slice_head(n = 137) %>%
+  mutate(renominationsAfter68 = case_when(Last_name == "Azcuenaga" |
+                                           Last_name == "Dixon" ~ T,
+                                         T ~ F)) %>%
+  mutate(multipleNoms = case_when(Last_name == "James" |
+                                    Last_name == "Varney" |
+                                            Last_name == "Pitofsky" ~ T,
+                                          T ~ F)) %>%
+  select(First_name: Last_name, hearingDocsObtained: Year_ended, multipleNoms) 
+
+part2_df = read_excel("data/Part_2_for_merge.xlsx") 
+
+part2_df_with_noms = part2_df %>%
+  select(-hearingDocsObtained, -Year_started, -Year_ended) %>%
+  filter(!Last_name %in% c("James", "Varney", "Pitofsky")) %>%
+  right_join(filter(nomination_df, !Last_name %in% c("James", "Varney", "Pitofsky")),
+             by = c("First_name", "Middle_name", "Last_name")) %>%
+  bind_rows(left_join(filter(nomination_df, Last_name %in% c("James", "Varney", "Pitofsky")),
+          filter(part2_df, Last_name %in% c("James", "Varney", "Pitofsky")))) %>%
+  mutate(Administration_appointee = case_when(Last_name == "Dixon" & Year_started == 1974 ~ "Ford",
+                                              Last_name == "Azcuenaga" & Year_started == 1991 ~ "GHWB",
+                                              T ~ Administration_appointee))
+  
+
+# part2_df_with_noms %>%
+#   write_xlsx("data/personnel_data_240330.xlsx")
+  
+
+
+```
+
+
+
+## Identifying renominated individuals
+```{r}
+library(rvest)
+
+page = read_html("https://en.wikipedia.org/wiki/List_of_members_of_the_Federal_Trade_Commission")
+
+html_tbls = page %>%
+  html_elements("table") %>%
+  html_table()
+
+time_in_office = html_tbls[[2]] %>%
+  rowwise() %>%
+  mutate(startYear = as.integer(str_extract_all(`Years in office`, ("[0-9]{4}"))[[1]][1])) %>%
+  mutate(endYear = as.integer(str_extract_all(`Years in office`, ("[0-9]{4}"))[[1]][2])) %>%
+  mutate(diffMoreSeven = ifelse(endYear - startYear > 7, T, F)) %>%
+  filter(diffMoreSeven) 
+```
+## Nomination analysis
+
+### Clean
+```{r clean nomination data}
+
+#table(part2_df_with_noms$hearingDocsObtained)
+
+nomination_df_clean = part2_df_with_noms %>%
+  filter(str_detect(hearingDocsObtained, "[Yy]es") |
+           str_detect(hearingDocsObtained, "No - Recess appointment") |
+           str_detect(hearingDocsObtained, "No Committee hearing") |
+           str_detect(hearingDocsObtained, "Only have the documents, not the hearing itself.")) %>%
+  mutate(enforcementEra = ifelse(Year_started < 1975, "High enforcement", "Low enforcement")) %>%
+  mutate(era = case_when(Year_started > 1968 & Year_started < 1980 ~ "1969-1979",
+                         Year_started > 1979 & Year_started < 1990 ~ "1980-1989",
+                         Year_started > 1989 & Year_started < 2000 ~ "1990-1999",
+                         Year_started > 1999 & Year_started < 2010 ~ "2000-2009",
+                         Year_started > 2009 & Year_started < 2020 ~ "2010-",
+                         T ~ as.character(NA))) %>%
+  mutate(hearingMinutesInt = as.double(`Hearing duration (in minutes)`)) %>%
+  mutate(substantiveDiscussionsYes = ifelse(str_detect(`Substantive discussions`, "[Yy]es"), 
+                                         1, 0)) %>%
+  mutate(substantiveDiscussionsNo = ifelse(str_detect(`Substantive discussions`, "[Yy]es"), 
+                                              0, 1)) %>%
+  mutate(proEnforcementYes = ifelse(str_detect(`Pro-Enforcement`, "Yes"), 1, 0)) %>%
+  mutate(proEnforcementNo = ifelse(str_detect(`Pro-Enforcement`, "No"), 1, 0)) %>%
+  mutate(proEnforcementMixed = ifelse(str_detect(`Pro-Enforcement`, "Mixed"), 1, 0)) 
+
+
+```
+
+
+
+
+```{r}
+library(rvest)
+
+page = read_html("https://en.wikipedia.org/wiki/List_of_presidents_of_the_United_States")
+
+html_tbls = page %>%
+  html_elements("table") %>%
+  html_table()
+
+presidentialTermStartYears = html_tbls[[2]] %>%
+  select(`Name(Birth–Death)`, Term) %>%
+  rowwise() %>%
+  mutate(termStartYear = as.integer(str_extract_all(Term, ("[0-9]{4}"))[[1]][1])) %>%
+  mutate(Name = case_when(str_detect(`Name(Birth–Death)`, "\\[") ~ 
+                            str_extract(`Name(Birth–Death)`, "\\s[A-z][a-z]+\\["),
+                          T ~ str_extract(`Name(Birth–Death)`, "\\s[A-z][a-z]+\\("))) %>%
+  mutate(Name = str_sub(Name, 2, nchar(Name)-1)) %>%
+  filter(termStartYear > 1932) %>%
+  group_by(Name, termStartYear) %>%
+  summarize(Name = first(Name), 
+            termStartYear = first(termStartYear)) %>%
+  ungroup() %>%
+  mutate(Name = case_when(Name == "Roosevelt" ~ "FDR",
+                          Name == "Kennedy" ~ "JFK",
+                          Name == "Johnson" ~ "LBJ",
+                          Name == "Bush" & termStartYear == 1989 ~ "GHWB",
+                          Name == "Bush" & termStartYear == 2001 ~ "GWB",
+                          T ~ Name))
+
+```
+
+
+### Nomination data split by president
+```{r}
+
+nomination_df_clean %>%
+  left_join(presidentialTermStartYears, 
+            by = c( "Administration_appointee" = "Name")) %>%
+  filter(Year_started > 1968) %>%
+  group_by(Administration_appointee) %>%
+  summarise(Count = n(),
+            across(hearingMinutesInt, funs(round(mean(., na.rm = T), 1))),
+            across(hearingMinutesInt, funs(median(., na.rm = T))),
+            across(substantiveDiscussionsYes, funs(sum(., na.rm = T))),
+            across(substantiveDiscussionsNo, funs(sum(., na.rm = T))),
+            across(proEnforcementYes, funs(sum(., na.rm = T))),
+            across(proEnforcementNo, funs(sum(., na.rm = T))),
+            across(proEnforcementMixed, funs(sum(., na.rm = T)))) %>%
+  ungroup() %>%
+  mutate(percentSubstantive = 
+           substantiveDiscussionsYes_sum / (substantiveDiscussionsYes_sum + substantiveDiscussionsNo_sum)) %>%
+  mutate(percentSubstantive = paste0(100*round(percentSubstantive, 4), "%")) %>%
+  select(Administration_appointee: substantiveDiscussionsNo_sum, 
+         percentSubstantive,
+         proEnforcementYes_sum:proEnforcementMixed_sum) %>%
+  left_join(presidentialTermStartYears, 
+            by = c( "Administration_appointee" = "Name")) %>%
+  arrange(termStartYear) %>%
+  rename(` ` = Administration_appointee,
+         Mean = hearingMinutesInt_round,
+         Median = hearingMinutesInt_median,
+         Yes = substantiveDiscussionsYes_sum,
+         No = substantiveDiscussionsNo_sum,
+         `%` = percentSubstantive,
+         Pro = proEnforcementYes_sum,
+         Anti = proEnforcementNo_sum,
+         Mixed = proEnforcementMixed_sum) %>%
+  select(-termStartYear) %>%
+  kable(caption = "Nomination hearing data by president",
+        booktabs = T, linesep = "", longtable = T) %>%
+  kable_styling(latex_options  = c("striped")) %>%
+  add_header_above(c(" " = 2, "Duration of nomination \nhearings (in minutes)" = 2, 
+                     "Substantive antitrust\n discussions?" = 3, 
+                     "Attitudes toward\n enforcement" = 3))
+
+
+
+
+```
+
+### Nomination data split by type of position and president
+```{r}
+
+nomination_df_clean %>%
+  left_join(presidentialTermStartYears, 
+            by = c( "Administration_appointee" = "Name")) %>%
+  filter(Year_started > 1968) %>%
+  group_by(Administration_appointee, Employer) %>%
+  summarise(Count = n(),
+            across(hearingMinutesInt, funs(round(mean(., na.rm = T), 1))),
+            across(hearingMinutesInt, funs(median(., na.rm = T))),
+            across(substantiveDiscussionsYes, funs(sum(., na.rm = T))),
+            across(substantiveDiscussionsNo, funs(sum(., na.rm = T))),
+            across(proEnforcementYes, funs(sum(., na.rm = T))),
+            across(proEnforcementNo, funs(sum(., na.rm = T))),
+            across(proEnforcementMixed, funs(sum(., na.rm = T)))) %>%
+  ungroup() %>%
+  mutate(percentSubstantive = 
+           substantiveDiscussionsYes_sum / (substantiveDiscussionsYes_sum + substantiveDiscussionsNo_sum)) %>%
+  mutate(percentSubstantive = paste0(100*round(percentSubstantive, 4), "%")) %>%
+  select(Administration_appointee: substantiveDiscussionsNo_sum, 
+         percentSubstantive,
+         proEnforcementYes_sum:proEnforcementMixed_sum) %>%
+  left_join(presidentialTermStartYears, 
+            by = c( "Administration_appointee" = "Name")) %>%
+  arrange(termStartYear) %>%
+  rename(` ` = Administration_appointee,
+         Agency = Employer,
+         Mean = hearingMinutesInt_round,
+         Median = hearingMinutesInt_median,
+         Yes = substantiveDiscussionsYes_sum,
+         No = substantiveDiscussionsNo_sum,
+         `%` = percentSubstantive,
+         Pro = proEnforcementYes_sum,
+         Anti = proEnforcementNo_sum,
+         Mixed = proEnforcementMixed_sum) %>%
+  select(-termStartYear) %>%
+  kable(caption = "Nomination hearing data by president and agency",
+        booktabs = T, linesep = "", longtable = T) %>%
+  kable_styling(latex_options  = c("striped")) %>%
+  add_header_above(c(" " = 3, "Duration of nomination \nhearings (in minutes)" = 2, 
+                     "Substantive antitrust\n discussions?" = 3, 
+                     "Attitudes toward\n enforcement" = 3))
+
+
+```
+
+### Nomination data split by type of position
+```{r}
+
+nomination_df_clean %>%
+  filter(Year_started > 1968) %>%
+  group_by(Employer) %>%
+  summarise(Count = n(),
+            across(hearingMinutesInt, funs(round(mean(., na.rm = T), 1))),
+            across(hearingMinutesInt, funs(median(., na.rm = T))),
+            across(substantiveDiscussionsYes, funs(sum(., na.rm = T))),
+            across(substantiveDiscussionsNo, funs(sum(., na.rm = T))),
+            across(proEnforcementYes, funs(sum(., na.rm = T))),
+            across(proEnforcementNo, funs(sum(., na.rm = T))),
+            across(proEnforcementMixed, funs(sum(., na.rm = T)))) %>%
+  ungroup() %>%
+  mutate(percentSubstantive = 
+           substantiveDiscussionsYes_sum / (substantiveDiscussionsYes_sum + substantiveDiscussionsNo_sum)) %>%
+  mutate(percentSubstantive = paste0(100*round(percentSubstantive, 4), "%")) %>%
+  select(Employer: substantiveDiscussionsNo_sum, 
+         percentSubstantive,
+         proEnforcementYes_sum:proEnforcementMixed_sum) %>%
+  rename(Agency = Employer,
+         Mean = hearingMinutesInt_round,
+         Median = hearingMinutesInt_median,
+         Yes = substantiveDiscussionsYes_sum,
+         No = substantiveDiscussionsNo_sum,
+         `%` = percentSubstantive,
+         Pro = proEnforcementYes_sum,
+         Anti = proEnforcementNo_sum,
+         Mixed = proEnforcementMixed_sum) %>%
+  kable(caption = "Nomination hearing data by decade",
+        booktabs = T, linesep = "", longtable = T) %>%
+  kable_styling(latex_options  = c("striped")) %>%
+  add_header_above(c(" " = 2, "Duration of nomination \nhearings (in minutes)" = 2, 
+                     "Substantive antitrust\n discussions?" = 3, 
+                     "Attitudes toward\n enforcement" = 3))
+
+```
+
+
+### Nomination data split by decade
+```{r}
+nomination_df_clean %>%
+  group_by(era) %>%
+  summarise(Count = n(),
+            across(hearingMinutesInt, funs(round(mean(., na.rm = T), 1))),
+            across(hearingMinutesInt, funs(median(., na.rm = T))),
+            across(substantiveDiscussionsYes, funs(sum(., na.rm = T))),
+            across(substantiveDiscussionsNo, funs(sum(., na.rm = T))),
+            across(proEnforcementYes, funs(sum(., na.rm = T))),
+            across(proEnforcementNo, funs(sum(., na.rm = T))),
+            across(proEnforcementMixed, funs(sum(., na.rm = T)))) %>%
+  ungroup() %>%
+  mutate(percentSubstantive = 
+           substantiveDiscussionsYes_sum / (substantiveDiscussionsYes_sum + substantiveDiscussionsNo_sum)) %>%
+  mutate(percentSubstantive = paste0(100*round(percentSubstantive, 4), "%")) %>%
+  filter(!is.na(era)) %>%
+  select(era: substantiveDiscussionsNo_sum, 
+         percentSubstantive,
+         proEnforcementYes_sum:proEnforcementMixed_sum) %>%
+  rename(` ` = era,
+         Mean = hearingMinutesInt_round,
+         Median = hearingMinutesInt_median,
+         Yes = substantiveDiscussionsYes_sum,
+         No = substantiveDiscussionsNo_sum,
+         `%` = percentSubstantive,
+         Pro = proEnforcementYes_sum,
+         Anti = proEnforcementNo_sum,
+         Mixed = proEnforcementMixed_sum) %>%
+  kable(caption = "Nomination hearing data by decade",
+        booktabs = T, linesep = "", longtable = T) %>%
+  kable_styling(latex_options  = c("striped")) %>%
+  add_header_above(c(" " = 2, "Duration of nomination \nhearings (in minutes)" = 2, 
+                     "Substantive antitrust\n discussions?" = 3, 
+                     "Attitudes toward\n enforcement" = 3))
+
+# nomination_df_clean %>%
+#   arrange(Year_started) %>%
+#   filter(era == "2000-2009") %>%
+#   select(Last_name, Year_started, `Substantive discussions`) 
+
+
+## edith and judith??
+## no substantive dicussions variable entry for Varney 2009?
+
+
+```
+
+### Nomination data split by party in control of Senate
+```{r}
+
+nomination_df_clean %>%
+  group_by(senateControlParty) %>%
+  mutate(senateControlParty = recode(senateControlParty, 
+                                     "D" = "Democrats",
+                                     "R" = "Republicans")) %>%
+  summarise(Count = n(),
+            across(hearingMinutesInt, funs(round(mean(., na.rm = T), 1))),
+            across(hearingMinutesInt, funs(median(., na.rm = T))),
+            across(substantiveDiscussionsYes, funs(sum(., na.rm = T))),
+            across(substantiveDiscussionsNo, funs(sum(., na.rm = T))),
+            across(proEnforcementYes, funs(sum(., na.rm = T))),
+            across(proEnforcementNo, funs(sum(., na.rm = T))),
+            across(proEnforcementMixed, funs(sum(., na.rm = T)))) %>%
+  ungroup() %>%
+  mutate(percentSubstantive = 
+           substantiveDiscussionsYes_sum / (substantiveDiscussionsYes_sum + substantiveDiscussionsNo_sum)) %>%
+  mutate(percentSubstantive = paste0(100*round(percentSubstantive, 4), "%")) %>%
+  filter(!is.na(senateControlParty)) %>%
+  select(senateControlParty: substantiveDiscussionsNo_sum, 
+         percentSubstantive,
+         proEnforcementYes_sum:proEnforcementMixed_sum) %>%
+  rename(`Senate control` = senateControlParty,
+         Mean = hearingMinutesInt_round,
+         Median = hearingMinutesInt_median,
+         Yes = substantiveDiscussionsYes_sum,
+         No = substantiveDiscussionsNo_sum,
+         `%` = percentSubstantive,
+         Pro = proEnforcementYes_sum,
+         Anti = proEnforcementNo_sum,
+         Mixed = proEnforcementMixed_sum) %>%
+  kable(caption = "Nomination hearing data by majority party in Senate",
+        booktabs = T, linesep = "", longtable = T) %>%
+  kable_styling(latex_options  = c("striped")) %>%
+  add_header_above(c(" " = 2, "Duration of nomination \nhearings (in minutes)" = 2, 
+                     "Substantive antitrust\n discussions?" = 3, 
+                     "Attitudes toward\n enforcement" = 3))
+
+
+```
+
+
+
+### Nomination data split by era and party in control of Senate
+```{r}
+
+nomination_df_clean %>%
+  group_by(enforcementEra, senateControlParty) %>%
+  mutate(senateControlParty = recode(senateControlParty,
+                                     "D" = "Democrats",
+                                     "R" = "Republicans")) %>%
+  summarise(Count = n(),
+            across(hearingMinutesInt, funs(round(mean(., na.rm = T), 1))),
+            across(hearingMinutesInt, funs(median(., na.rm = T))),
+            across(substantiveDiscussionsYes, funs(sum(., na.rm = T))),
+            across(substantiveDiscussionsNo, funs(sum(., na.rm = T))),
+            across(proEnforcementYes, funs(sum(., na.rm = T))),
+            across(proEnforcementNo, funs(sum(., na.rm = T))),
+            across(proEnforcementMixed, funs(sum(., na.rm = T)))) %>%
+  ungroup() %>%
+  mutate(percentSubstantive = 
+           substantiveDiscussionsYes_sum / (substantiveDiscussionsYes_sum + substantiveDiscussionsNo_sum)) %>%
+  mutate(percentSubstantive = paste0(100*round(percentSubstantive, 4), "%")) %>%
+  filter(!is.na(senateControlParty)) %>%
+  select(enforcementEra: substantiveDiscussionsNo_sum, 
+         percentSubstantive,
+         proEnforcementYes_sum:proEnforcementMixed_sum) %>%
+  rename(`Enforcement era` = enforcementEra,
+        `Party with Senate control` = senateControlParty,
+         Mean = hearingMinutesInt_round,
+         Median = hearingMinutesInt_median,
+         Yes = substantiveDiscussionsYes_sum,
+         No = substantiveDiscussionsNo_sum,
+         `%` = percentSubstantive,
+         Pro = proEnforcementYes_sum,
+         Anti = proEnforcementNo_sum,
+         Mixed = proEnforcementMixed_sum) %>%
+  kable(caption = "Nomination hearing data by Senate control and enforcement era",
+        booktabs = T, linesep = "") %>%
+  kable_styling(latex_options  = c("striped", "hold_position")) %>%
+  add_header_above(italic = T, c("Time period" = 2, " " = 1, "Duration of nomination \nhearings (in minutes)" = 2, 
+                     "Substantive antitrust\n discussions?" = 3, 
+                     "Attitudes toward\n enforcement" = 3))
+  
+  
+```
+
+
+
+
+
+
+## Did the NYT cover nominations/hearings?
+```{r}
+set.seed(736)
+nominationCoverage_df = nomination_df_clean %>%
+  filter(nytCoverageSearched == "Yes") %>%
+  mutate(Name = paste0(First_name, " ", Last_name)) %>%
+  select(Name, Employer, Year_started, starts_with("nytCovered")) 
+
+
+nominationCoverage_df %>%
+  arrange(Year_started) %>%
+  rename(Agency = Employer, 
+         `Start year` = Year_started,
+         `Nomination` = nytCoveredNomination,
+         `Hearing` = nytCoveredHearings) %>%
+  kable(caption = "Nomination hearing data by decade",
+        booktabs = T, linesep = "", longtable = T) %>%
+  kable_styling(latex_options  = c("striped")) %>%
+  add_header_above(c(" " = 3, "NYT coverage of:" = 2))
+
 
 ```
 

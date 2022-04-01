@@ -48,7 +48,7 @@ bf_scores_read = read_csv("data/Business2020_sb1.csv")
 
 ```
 
-```{r}
+```{r clean SCT cases}
 antitrust_westlaw_sc_cases = antitrust_westlaw_sc_cases_sherman %>%
   mutate(statuteType = "sherman") %>%
   full_join(antitrust_westlaw_sc_cases_clayton) %>%
@@ -57,9 +57,12 @@ antitrust_westlaw_sc_cases = antitrust_westlaw_sc_cases_sherman %>%
   rename(includeFinal = INCLUDE.FINAL.,
          sherman1 = Sherman.1,
          sherman2 = Sherman.2,
-         proAntitrustEnforcement = Pro.antitrust.enforcement) %>%
-  filter(year < 2020)
+         proAntitrustEnforcement = Pro.antitrust.enforcement) 
 
+#setwd("/Users/simabiondi/Desktop/Posner/antitrust/data")
+
+#antitrust_westlaw_sc_cases %>%
+#  write.csv(., file = "post51_sct_antitrust_cases_final.csv")
 ```
 
 
@@ -671,6 +674,8 @@ justice_numbers_tbl = html_tbls[[6]] %>%
 
 ```
 
+
+
 ## Summary mean of overall business friendliness score (bf) and business friendliness score of business-related cases appearing in the NYT (nyt)
 
 All statistics only include justices appointed post-1945. 
@@ -908,7 +913,7 @@ justice_scores %>%
 
 ```
 
-```{r}
+```{r justice scores comparison by party}
 justice_scores %>%
   left_join(select(justice_per_court, c(justiceName, Party, era, year_oath))) %>%
   filter(score_type == "pe_score" | score_type == "psb_score") %>%
@@ -1111,7 +1116,7 @@ court_case_scores %>%
                               "psb_score" = "Pro-small company score",
                               "gov_score" = "Pro-goverment score")) %>%
   ggplot(aes(x = court_term, y = score, color = type_case_score)) + 
-  geom_point() + 
+  geom_point() + geom_smooth(method = "lm") +
  #     scale_color_grey(start = 0.25, end = 0.75) + 
   theme_classic() +
   labs(x = "Court Term", y = "Average score",
@@ -1290,7 +1295,7 @@ court_case_scores %>%
 ```
 
 
-```{r psb of majOpinWriter}
+```{r pe and psb of majOpinWriter}
 
 justice_votes %>%
   select(majOpinWriter, year) %>%
@@ -1430,7 +1435,7 @@ court_ae_score_top5 %>%
     scale_color_grey(start = 0.1, end = 0.5) + theme_minimal() +
     labs(x = "Court Term", y = "Mean", title = "Moving average of top 5 anti-enforcement and pro-large\n company bias scores over SCT terms",
          color = "Type of score") 
-
+ 
 court_bf_score_top5 %>%
   left_join(court_ae_score_top5, by = "term", suffix = c("_bf", "_ae")) %>%
   pivot_longer(!term, names_to = "mean_type", values_to = "mean") %>%
@@ -1614,7 +1619,7 @@ antitrust_westlaw_sc_cases %>%
 ```
 
 
-## Win-loss graphs
+## Expanding to diminishing enforcement ratio (win-loss) graphs
 ```{r antitrust enforcement all cases}
 
 #bar chart
@@ -1623,7 +1628,7 @@ antitrust_westlaw_sc_cases %>%
   ggplot() + 
   geom_bar(aes(x = year, fill = proAntitrustEnforcement), position = "stack") + 
   theme_classic() + theme(legend.position = "bottom") +
-  labs(title = "Win-loss ratio of Supreme Court antitrust cases", 
+  labs(title = "Expanding to diminishing enforcement ratio of Supreme Court antitrust cases", 
        x = "Court Term",
        y = "Count",
        fill = "Expands enforcement?") +
@@ -1645,7 +1650,7 @@ antitrust_westlaw_sc_cases %>%
   mutate(pro_enforce_perc = Yes/ (No + Yes)) %>%
   ggplot(aes(x = year, y = pro_enforce_perc)) + geom_point() +
   theme_classic() + theme(legend.position = "bottom", legend.title = element_blank()) +
-  labs(title = "Win-loss ratio of antitrust cases by year", 
+  labs(title = "Expanding to diminishing enforcement ratio of antitrust cases by year", 
        x = "Court Term",
        y = "Proportion of cases that expand enforcement") +
     scale_y_continuous(breaks= breaks_pretty()) +
@@ -1668,7 +1673,7 @@ antitrust_westlaw_sc_cases %>%
 #  mutate(decadeString = paste0(decade, "s")) %>%
   ggplot() + geom_point(aes(x = decade, y = pro_enforce_perc)) + 
   theme_classic() + theme(legend.position = "bottom", legend.title = element_blank()) +
-  labs(title = "Win-loss ratio of antitrust cases by decade", 
+  labs(title = "Expanding to diminishing enforcement ratio of antitrust cases by decade", 
        x = "Court Term",
        y = "Proportion of cases that expand enforcement") +
     scale_y_continuous(breaks= breaks_pretty()) + 
@@ -1690,7 +1695,7 @@ antitrust_westlaw_sc_cases %>%
   ggplot(aes(x = decade, y = pro_enforce_perc)) + geom_boxplot() + 
   geom_point(na.rm = T, color = "red") +
   theme_classic() + theme(legend.position = "bottom", legend.title = element_blank()) +
-  labs(title = "Win-loss ratio of antitrust cases by decade", 
+  labs(title = "Expanding to diminishing enforcement ratio of antitrust cases by decade", 
        x = "Court Term",
        y = "Proportion of cases that expand enforcement") +
     scale_y_continuous(breaks= breaks_pretty()) + geom_smooth(method = "lm")
@@ -1711,7 +1716,7 @@ antitrust_westlaw_sc_cases %>%
   mutate(pro_enforce_perc = Yes/ (No + Yes)) %>%
   ggplot(aes(x = year, y = pro_enforce_perc)) + geom_point() +
   theme_classic() + theme(legend.position = "bottom", legend.title = element_blank()) +
-  labs(title = "Win-loss ratio by year of antitrust cases involving business vs. business cases", 
+  labs(title = "Expanding to diminishing enforcement ratio by year of antitrust cases involving business vs. business cases", 
        x = "Court Term",
        y = "Proportion of business vs. business\n cases that expand enforcement") +
     scale_y_continuous(breaks= breaks_pretty()) +
@@ -1734,7 +1739,7 @@ antitrust_westlaw_sc_cases %>%
   mutate(pro_enforce_perc = Yes/ (No + Yes)) %>%
   ggplot(aes(x = decade, y = pro_enforce_perc)) + geom_point() +
   theme_classic() + theme(legend.position = "bottom", legend.title = element_blank()) +
-  labs(title = "Win-loss ratio by decade of antitrust cases involving business vs. business cases", 
+  labs(title = "Expanding to diminishing enforcement ratio by decade of antitrust cases involving business vs. business cases", 
        x = "Court Term",
        y = "Proportion of business vs. business\n cases that expand enforcement") +
     scale_y_continuous(breaks= breaks_pretty())+ 
@@ -1756,7 +1761,7 @@ antitrust_westlaw_sc_cases %>%
   mutate(decade = (paste0(str_extract(year, "[0-9]{3}"), "0s"))) %>%
   ggplot(aes(x = decade, y = pro_enforce_perc)) + geom_boxplot() + geom_point(color = "red") +
   theme_classic() + theme(legend.position = "bottom", legend.title = element_blank()) +
-  labs(title = "Win-loss ratio by decade of antitrust cases\n of business vs. business cases", 
+  labs(title = "Expanding to diminishing enforcement ratio by decade of antitrust cases\n of business vs. business cases", 
        x = "Court Term",
        y = "Proportion of business vs. business\n cases that expand enforcement") +
     scale_y_continuous(breaks= breaks_pretty())
@@ -1776,7 +1781,7 @@ antitrust_westlaw_sc_cases %>%
   mutate(pro_enforce_perc = Yes/ (No + Yes)) %>%
   ggplot(aes(x = year, y = pro_enforce_perc)) + geom_point() +
   theme_classic() + theme(legend.position = "bottom", legend.title = element_blank()) +
-  labs(title = "Win-loss ratio by year of antitrust cases involving a government litigant", 
+  labs(title = "Expanding to diminishing enforcement ratio by year of antitrust cases involving a government litigant", 
        x = "Court Term",
        y = "Proportion of cases involving the government that expand enforcement") +
     scale_y_continuous(breaks= breaks_pretty())  +
@@ -1798,7 +1803,7 @@ antitrust_westlaw_sc_cases %>%
   mutate(pro_enforce_perc = Yes/ (No + Yes)) %>%
   ggplot(aes(x = decade, y = pro_enforce_perc)) + geom_point() +
   theme_classic() + theme(legend.position = "bottom", legend.title = element_blank()) +
-  labs(title = "Win-loss ratio by decade of antitrust cases involving a government litigant", 
+  labs(title = "Expanding to diminishing enforcement ratio by decade of antitrust cases involving a government litigant", 
        x = "Court Term",
        y = "Proportion of cases involving the government that expand enforcement") +
     scale_y_continuous(breaks= breaks_pretty()) + 
@@ -1823,7 +1828,7 @@ antitrust_westlaw_sc_cases %>%
   ggplot(aes(x = decade, y = pro_enforce_perc)) + geom_boxplot() + 
   geom_point(color = "red") +
   theme_classic() + theme(legend.position = "bottom", legend.title = element_blank()) +
-  labs(title = "Win-loss ratio of antitrust cases involving a government litigant", 
+  labs(title = "Expanding to diminishing enforcement ratio of antitrust cases involving a government litigant", 
        x = "Court Term",
        y = "Proportion of cases involving the \ngovernment that expand enforcement") +
     scale_y_continuous(breaks= breaks_pretty())

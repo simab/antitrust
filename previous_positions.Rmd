@@ -24,12 +24,20 @@ library(stringr)
 library(kableExtra)
 library(lemon)
 library(flextable)
-install.packages("flextable")
+library(usethis)
+#install.packages("flextable")
 fig.path = here::here("figs/final draft")
 
 ```
 
-testing
+```{r}
+git_sitrep()
+#gitcreds::gitcreds_set()
+?git_vaccinate()
+
+?git_default_branch_rediscover()
+```
+
 
 ## Merging nomination data with personnel Excel
 ```{r}

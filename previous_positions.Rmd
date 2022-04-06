@@ -29,6 +29,8 @@ fig.path = here::here("figs/final draft")
 
 ```
 
+testing
+
 ## Merging nomination data with personnel Excel
 ```{r}
 nomination_df = read_excel("data/Summary of Nominations - completed.xlsx") %>%

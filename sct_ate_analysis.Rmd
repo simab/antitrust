@@ -27,6 +27,7 @@ fig.path = here::here("figs/final draft")
 
 ```
 
+testing 
 
 ```{r read}
 sc_judge_read = read_excel("data/Supreme Court Chart.xlsx", sheet = "Business friendliness")
